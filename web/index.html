@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="BunkSoft — petrol bunk management: sales, stock, expenses, PL reports and credit. By Subsel Tech Solutions.">
+<meta name="theme-color" content="#0A2A5C">
+<title>BunkSoft — Petrol Bunk Management</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Mulish:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="./css/app.css">
+<script src="./js/config.js"></script>
+</head>
+<body>
+
+<!-- sign-in / onboarding lives here until a bunk is open -->
+<div id="gate"></div>
+
+<!-- the application shell -->
+<div id="shell" hidden>
+<div class="app">
+<aside class="side">
+  <div class="brandbox">
+    <div class="brandmark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1565D8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16"/><path d="M2 21h14"/><path d="M4 11h10"/>
+        <path d="M17 8l3 3v7a1.5 1.5 0 0 0 3 0v-9l-3-3"/>
+      </svg>
+    </div>
+    <div style="min-width:0">
+      <div class="blogo">Bunk<i>Soft</i></div>
+      <div class="btag">Petrol Bunk Management</div>
+    </div>
+  </div>
+  <nav class="sidenav" id="tabs" aria-label="Sections"></nav>
+  <div class="sideacct">
+    <button class="nv small" data-act="switchbunk" title="Open a different bunk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h13"/><path d="M12 5l7 7-7 7"/><path d="M21 5v14"/></svg>
+      <span>Switch bunk</span></button>
+    <button class="nv small" data-act="signout" title="Sign out of BunkSoft">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      <span>Sign out</span></button>
+  </div>
+  <div class="sidefoot">Subsel Tech Solutions Pvt Ltd<br>Powering petrol bunks. Driving growth.</div>
+</aside>
+
+<div class="main">
+  <header class="top">
+    <div class="topin">
+      <div style="min-width:0">
+        <div class="bname" id="hdName">BunkSoft</div>
+        <div class="bmeta" id="hdMeta">by Subsel Tech Solutions</div>
+      </div>
+      <div class="spacer"></div>
+      <div class="datebox">
+        <button class="daynav" data-act="day-prev" title="Previous day" aria-label="Previous day">‹</button>
+        <input type="date" id="curDate" aria-label="Business date">
+        <button class="daynav" data-act="day-next" title="Next day" aria-label="Next day">›</button>
+      </div>
+      <button class="tb" data-act="today">Today</button>
+      <span class="pill wr" id="storageDot">Connecting…</span>
+      <button class="tb" data-act="theme" aria-label="Toggle theme" title="Toggle light / dark">◐</button>
+    </div>
+  </header>
+
+  <div class="rateboard"><div class="rbin" id="rateBoard"></div></div>
+
+  <main class="wrap" id="view"></main>
+</div>
+</div>
+<div id="layer"></div>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+<noscript><p style="padding:24px;font:16px system-ui">BunkSoft needs JavaScript enabled.</p></noscript>
+</body>
+</html>
