@@ -456,4 +456,110 @@ begin
     'the audit log names the administrator who acted');
 end $$;
 
+-- ---------------------------------------------------------------------------
+--  9. The role model
+--  Three defects found in audit, each of which let a manager do something a
+--  manager must not. These tests keep them fixed.
+-- ---------------------------------------------------------------------------
+do $$
+declare v_admin uuid; v_bunk uuid; v_owner uuid; v_mgr uuid; v_op uuid; n int;
+begin
+  select user_id into v_admin from public.platform_admins
+   where user_id = (select id from auth.users where email='admin@subsel.in');
+  perform pg_temp.act_as(v_admin);
+
+  select id into v_bunk from public.bunks where name = 'Sri Balaji Fuels';
+  select id into v_owner from auth.users where email = 'balaji@example.com';
+  perform public.admin_create_staff(v_bunk,'mgr1@example.com','Manager2026x','manager','A Manager');
+  select id into v_mgr from auth.users where email = 'mgr1@example.com';
+  select id into v_op  from auth.users where email = 'operator1@example.com';
+
+  -- (a) a member can read a teammate's profile, so the Team list shows names
+  perform pg_temp.act_as(v_mgr);
+  set local role authenticated;
+  perform pg_temp.ok((select count(*) from public.profiles) >= 3,
+    'a member can read the profiles of people on the same bunk');
+  reset role;
+
+  -- and not of a stranger on another bunk
+  perform pg_temp.ok(
+    not public.shares_bunk_with((select id from auth.users where email='kaveri@example.com')),
+    'a member cannot read the profile of someone on another bunk');
+
+  -- (b) a manager cannot promote themselves to owner
+  perform pg_temp.act_as(v_mgr);
+  set local role authenticated;
+  begin
+    update public.memberships set role = 'owner'
+     where bunk_id = v_bunk and user_id = v_mgr;
+    get diagnostics n = row_count;
+    reset role;
+    if n > 0 then raise exception 'FAIL  a manager promoted themselves to owner'; end if;
+    raise notice 'PASS  a manager cannot promote themselves to owner';
+  exception when insufficient_privilege or check_violation then
+    reset role;
+    raise notice 'PASS  a manager cannot promote themselves to owner';
+  end;
+
+  -- (c) a manager cannot remove the owner
+  perform pg_temp.act_as(v_mgr);
+  set local role authenticated;
+  delete from public.memberships where bunk_id = v_bunk and user_id = v_owner;
+  get diagnostics n = row_count;
+  reset role;
+  perform pg_temp.ok(n = 0, 'a manager cannot delete the owner''s membership');
+  perform pg_temp.ok(
+    (select count(*) from public.memberships where bunk_id = v_bunk and user_id = v_owner) = 1,
+    'the owner still has their bunk');
+
+  -- a manager CAN still do their job
+  perform pg_temp.act_as(v_mgr);
+  set local role authenticated;
+  update public.memberships set role = 'manager' where bunk_id = v_bunk and user_id = v_op;
+  get diagnostics n = row_count;
+  reset role;
+  perform pg_temp.ok(n = 1, 'a manager can still change an operator''s role');
+
+  -- (d) the last owner cannot be removed or demoted
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  begin
+    delete from public.memberships where bunk_id = v_bunk and user_id = v_owner;
+    reset role;
+    raise exception 'FAIL  the last owner was removed';
+  exception when check_violation then
+    reset role;
+    raise notice 'PASS  the last owner of a bunk cannot be removed';
+  end;
+
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  begin
+    update public.memberships set role = 'manager' where bunk_id = v_bunk and user_id = v_owner;
+    reset role;
+    raise exception 'FAIL  the last owner demoted themselves';
+  exception when check_violation then
+    reset role;
+    raise notice 'PASS  the last owner cannot demote themselves';
+  end;
+
+  -- (e) an administrator is warned before stranding a bunk
+  perform pg_temp.act_as(v_admin);
+  begin
+    perform public.admin_delete_account(v_owner, 'balaji@example.com');
+    raise exception 'FAIL  deleting the only owner stranded a bunk';
+  exception when others then
+    if position('only owner of' in sqlerrm) = 0 then raise; end if;
+    raise notice 'PASS  deleting a bunk''s only owner is refused, naming the bunk';
+  end;
+
+  -- (f) removing the bunk still cascades
+  perform pg_temp.act_as(v_admin);
+  perform public.admin_delete_bunk(
+    (select id from public.bunks where name = 'Kaveri Petroleum'), 'Kaveri Petroleum');
+  perform pg_temp.ok(
+    (select count(*) from public.bunks where name = 'Kaveri Petroleum') = 0,
+    'removing a bunk still cascades its memberships away');
+end $$;
+
 do $$ begin raise notice ' '; raise notice 'All administration checks passed.'; end $$;

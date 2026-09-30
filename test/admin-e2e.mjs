@@ -220,7 +220,7 @@ await page.fill('#ai_pass', genPass);
 await page.click('#ai_go'); await wait(900);
 ok('the console refuses them', /not an administrator/i.test(await page.textContent('body')));
 ok('the console itself is never rendered for them', !(await shown('#atabs')));
-ok('it points them back to the bunk app', !!(await page.$('a[href="../"]')));
+ok('it points them back to the bunk app', !!(await page.$('a[href="/"]')));
 
 /* The interface refusing them proves little on its own. Call the admin
    functions directly, as that signed-in owner, and check the backend refuses
@@ -316,7 +316,24 @@ await page.click('[data-tab="setup"]'); await wait(600);
 ok('Settings is read-only for them',
   !(await page.$('[data-act="savecfg"]')) || /read-only|operator/i.test(await page.textContent('#view')));
 
-console.log('\n11. Page errors');
+console.log('\n11. The owner sees their team by name');
+/* Settings -> Team used to sit on "Loading the team..." forever: the profiles
+   policy let you read only your own row, and the query embedded profiles
+   across a foreign key that does not exist. Both are fixed; this keeps them
+   fixed. */
+await appSignIn('balaji@example.com', genPass);
+await page.click('[data-tab="setup"]'); await wait(1200);
+{
+  const team = await page.textContent('#view');
+  ok('the team panel is rendered for an owner', /Team/.test(team));
+  ok('it is no longer stuck on "Loading the team"', !/Loading the team/.test(team));
+  ok('the owner sees their own name', /R Balaji/.test(team));
+  ok("the owner sees the operator's name, not a dash", /M Raja/.test(team));
+  ok('book stock is shown but not editable in Settings',
+    !(await page.$('#view input[data-tf="stock"]')));
+}
+
+console.log('\n12. Page errors');
 ok('no uncaught JavaScript errors anywhere', errs.length === 0);
 if (errs.length) errs.slice(0, 8).forEach(e => console.log('        ' + e));
 

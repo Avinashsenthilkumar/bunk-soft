@@ -69,13 +69,27 @@ export function createFakeClient(T, state) {
 
   /* row-level security, simplified to the rule that matters: membership */
   const myBunkIds = () => T.memberships.filter(m => m.user_id === me()).map(m => m.bunk_id);
+  /* Mirrors profiles_read in admin.sql: yourself, and anyone on a bunk you
+     belong to. Before that policy existed this was `r.id === me()`, which is
+     why the team list could never show a colleague's name. */
+  const sharesBunk = id => T.memberships.some(m =>
+    m.user_id === id && myBunkIds().includes(m.bunk_id));
   const visible = (table, r) =>
-    table === 'profiles' ? r.id === me() : !r.bunk_id || myBunkIds().includes(r.bunk_id);
+    table === 'profiles' ? (r.id === me() || sharesBunk(r.id))
+                         : !r.bunk_id || myBunkIds().includes(r.bunk_id);
+  const myRoleOn = b => (T.memberships.find(x => x.bunk_id === b && x.user_id === me()) || {}).role;
   const canWrite = (table, r) => {
     if (!myBunkIds().includes(r.bunk_id)) return false;
     if (['products', 'tanks', 'nozzles', 'bunks'].includes(table)) {
-      const m = T.memberships.find(x => x.bunk_id === r.bunk_id && x.user_id === me());
-      return m && (m.role === 'owner' || m.role === 'manager');
+      const role = myRoleOn(r.bunk_id);
+      return role === 'owner' || role === 'manager';
+    }
+    /* Mirrors can_manage_membership in admin.sql: an owner may do anything to
+       the team; a manager may do anything that does not involve an owner. */
+    if (table === 'memberships') {
+      const role = myRoleOn(r.bunk_id);
+      if (role === 'owner') return true;
+      return role === 'manager' && r.role !== 'owner';
     }
     return true;
   };
@@ -96,6 +110,7 @@ export function createFakeClient(T, state) {
     const api = {
       select(sel) { q._sel = sel || '*'; return api; },
       eq(c, v) { q._f.push([c, '=', v]); return api; },
+      in(c, vs) { q._f.push([c, 'in', (vs || []).map(String)]); return api; },
       gte(c, v) { q._f.push([c, '>=', v]); return api; },
       lte(c, v) { q._f.push([c, '<=', v]); return api; },
       order(c, o) { q._order.push([c, (o && o.ascending === false) ? -1 : 1]); return api; },
@@ -110,7 +125,9 @@ export function createFakeClient(T, state) {
     };
 
     const match = r => q._f.every(([c, op, v]) =>
-      op === '=' ? String(r[c]) === String(v) : op === '>=' ? r[c] >= v : r[c] <= v);
+      op === '='  ? String(r[c]) === String(v) :
+      op === 'in' ? v.includes(String(r[c]))   :
+      op === '>=' ? r[c] >= v : r[c] <= v);
 
     async function exec() {
       try {

@@ -115,12 +115,26 @@ export const repo = {
   addMember(email, role) {
     return run('add_member', sb.rpc('add_member', { p_bunk: this.bunkId, p_email: email, p_role: role }));
   },
+  /* Two queries rather than one embedded select. PostgREST can only embed
+     across a foreign key, and memberships has none to profiles — both point
+     at auth.users instead — so `profiles(full_name)` fails with PGRST200 and
+     the team list never loads. Joining here needs no relationship at all. */
   async members() {
     const rows = await run('members', sb.from('memberships')
-      .select('user_id, role, created_at, profiles(full_name)').eq('bunk_id', this.bunkId));
+      .select('user_id, role, created_at').eq('bunk_id', this.bunkId));
+    const ids = (rows || []).map(r => r.user_id);
+    let names = {};
+    if (ids.length) {
+      const profs = await run('memberProfiles',
+        sb.from('profiles').select('id, full_name').in('id', ids));
+      (profs || []).forEach(p => { names[p.id] = p.full_name; });
+    }
     return (rows || []).map(r => ({
-      userId: r.user_id, role: r.role, name: r.profiles?.full_name || '—', since: r.created_at
-    }));
+      userId: r.user_id, role: r.role,
+      name: names[r.user_id] || '—', since: r.created_at
+    })).sort((a, b) =>
+      ({ owner: 0, manager: 1, operator: 2 }[a.role] - { owner: 0, manager: 1, operator: 2 }[b.role])
+      || String(a.name).localeCompare(String(b.name)));
   },
   removeMember(userId) {
     return run('removeMember', sb.from('memberships').delete()
@@ -278,6 +292,10 @@ export const repo = {
       day.shifts[s.name] = {
         id: s.id, operator: s.operator || '', closed: !!s.closed,
         closedAt: s.closed_at ? new Date(s.closed_at).toTimeString().slice(0, 5) : '',
+        /* The raw timestamp travels with the shift so that re-saving a closed
+           shift keeps the time it was actually closed, rather than stamping
+           it again on every edit. */
+        closedAtISO: s.closed_at || null,
         cash: Number(s.cash), card: Number(s.card), upi: Number(s.upi), bank: Number(s.bank),
         other: { amount: Number(s.other_amount), cost: Number(s.other_cost), note: s.other_note || '' },
         credit: [], readings

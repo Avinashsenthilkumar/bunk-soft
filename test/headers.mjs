@@ -189,15 +189,22 @@ await page.route('**/fonts.googleapis.com/**', r => r.fulfill({ status: 200,
 await page.route('**/cdnjs.cloudflare.com/**', r => r.fulfill({ status: 200,
   contentType: 'text/javascript', body: 'window.jspdf={jsPDF:function(){}};' }));
 
+/* /admin without the trailing slash is the case that bites: the browser takes
+   / as the base directory, so a relative ./admin.css resolves to /admin.css
+   and the page renders blank with nothing in the console to explain it. Both
+   spellings are checked, and "stylesheet applied" is what catches it. */
 for (const [label, url, probe] of [
   ['the bunk app', '/', '#au_email'],
-  ['the admin console', '/admin/', '#ai_email']
+  ['the admin console', '/admin/', '#ai_email'],
+  ['the admin console without a trailing slash', '/admin', '#ai_email']
 ]) {
   violations.length = 0; errs.length = 0;
   await page.goto(BASE + url, { waitUntil: 'load' });
   await page.waitForTimeout(1200);
   const inPage = await page.evaluate(() => window.__csp || []);
   ok(`${label} renders its sign-in under the policy`, !!(await page.$(probe)));
+  ok(`${label} actually loaded its stylesheet`,
+    await page.evaluate(() => getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'));
   ok(`${label} reports no CSP violation`, violations.length === 0 && inPage.length === 0,
     [...violations, ...inPage].slice(0, 4).join('\n        '));
   ok(`${label} loads the Supabase client despite the policy`,

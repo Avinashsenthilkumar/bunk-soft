@@ -285,6 +285,27 @@ a bunk session in the same browser. It signs itself out after 20 minutes idle.
 same-origin response — an error page saved into the cache would be served for
 as long as the cache lived.
 
+**Fixed in the audit** — four defects found reading the code end to end, all
+now covered by tests:
+
+- A **manager could promote themselves to owner** with one direct API call.
+  `add_member()` refused it, but the memberships policy granted managers `for
+  all`, and a browser console is all it took to go around the function. A
+  manager could then **delete the owner's membership** and lock the owner out
+  of their own bunk. Both are closed: a manager can no longer create, edit or
+  delete an owner's row, and a trigger keeps at least one owner on every bunk.
+- **Settings → Team never showed anyone's name.** The profiles policy allowed
+  reading only your own row, and the query embedded `profiles` across a
+  foreign key that does not exist between `memberships` and `profiles`. You
+  can now read the profile of anyone on a bunk you belong to — and nobody
+  else — and the repository joins in JavaScript instead of relying on
+  PostgREST to infer a relationship.
+- **Book stock was editable in Settings and silently discarded.** The database
+  owns tank stock, so the repository never sent the field. It is now shown
+  read-only, pointing at the dip reading that is the real way to correct it.
+- **Re-saving a closed shift moved its closing time** to the moment of the
+  edit, because the original timestamp was not carried back from the database.
+
 **What is still yours to do**
 - Give the console a bookmark, not a link, and do not put the URL in email
   signatures or tickets. It is not a secret, but there is no reason to publish
@@ -375,7 +396,7 @@ psql -d bunksoft_test -f supabase/test_admin.sql    # administration rules
 refused, stock trigger arithmetic, the balance view, and that an operator's
 rate change affects 0 rows.
 
-`test_admin.sql` runs 64 checks: that an administrator can create a business
+`test_admin.sql` runs 74 checks: that an administrator can create a business
 whose owner then signs in; that a bunk owner cannot create an account, promote
 themselves, reset anyone's password or read the audit log; that an
 administrator cannot read a customer's cash figures; that suspension blocks a

@@ -12,6 +12,9 @@
   --t-amber:#C9740A; --t-amber-s:#FDF0DC;
   --t-red:#D11F45;  --t-red-s:#FCE4E9;
   --t-purple:#7E3FAE; --t-purple-s:#F0E7F8;
+  /* Ink for text on the dark meter strip — the same in both themes,
+     because that strip is navy in both. */
+  --display-ink:#FFFFFF;
   --shadow:0 1px 2px rgba(15,32,56,.06), 0 6px 18px rgba(15,32,56,.05);
   --shadow-2:0 18px 44px rgba(10,42,92,.22);
   --r:12px; --r-sm:8px;
@@ -34,6 +37,7 @@
   --t-amber:#C2871F; --t-amber-s:#31260F;
   --t-red:#DE4E6B;  --t-red-s:#341A21;
   --t-purple:#9A6BCC; --t-purple-s:#261A38;
+  --display-ink:#FFFFFF;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.25);
   --shadow-2:0 18px 44px rgba(0,0,0,.5);
 }}
@@ -51,6 +55,7 @@
   --t-amber:#C2871F; --t-amber-s:#31260F;
   --t-red:#DE4E6B;  --t-red-s:#341A21;
   --t-purple:#9A6BCC; --t-purple-s:#261A38;
+  --display-ink:#FFFFFF;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.25);
   --shadow-2:0 18px 44px rgba(0,0,0,.5);
 }

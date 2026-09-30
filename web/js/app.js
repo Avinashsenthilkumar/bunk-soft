@@ -7,7 +7,6 @@ import { repo } from './db.js';
 
 /* ============================ helpers ============================ */
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const NF=new Intl.NumberFormat('en-IN');
 const nf=(n,d=0)=>{n=Number(n)||0;return n.toLocaleString('en-IN',{minimumFractionDigits:d,maximumFractionDigits:d});};
 const money=n=>'₹'+nf(Math.round(Number(n)||0));
 const money2=n=>'₹'+nf(Number(n)||0,2);
@@ -29,7 +28,6 @@ const clone=o=>JSON.parse(JSON.stringify(o));
 function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;$('#layer').appendChild(t);setTimeout(()=>t.remove(),2600);}
 
 /* ============================ state ============================ */
-let DB=null, DL=null, CANWRITE=null, BOUND=false;
 const S={
   ready:false, preview:false, mode:'loading',
   config:null, tanks:[], customers:[], days:{},
@@ -41,13 +39,8 @@ const prod=pid=>(S.config?.products||[]).find(p=>p.id===pid)||{id:pid,short:'?',
 const tank=tid=>S.tanks.find(t=>t.id===tid)||null;
 const cust=cid=>S.customers.find(c=>c.id===cid)||null;
 
-/* ============================ defaults / sample ============================ */function defaultTanks(){
-  return [
-    {id:'t1',name:'Tank 1',product:'ms', capacity:12000,stock:6820,min:1500},
-    {id:'t2',name:'Tank 2',product:'hsd',capacity:20000,stock:11460,min:2500},
-    {id:'t3',name:'Tank 3',product:'xp', capacity:6000, stock:2240,min:800}
-  ];
-}/* deterministic pseudo-random so the sample looks like a real week, not noise */
+/* ============================ defaults / sample ============================ */
+/* deterministic pseudo-random so the sample looks like a real week, not noise */
 function rnd(seed){let x=Math.sin(seed)*10000;return x-Math.floor(x);}function blankDay(date,cfg){
   const rates={}; ((cfg||S.config)?.products||[]).forEach(p=>rates[p.id]={sell:p.sell,buy:p.buy});
   return {date,rates,shifts:{},receipts:[],dips:[],expenses:[],payments:[],deposits:[],openingCash:0,cashCounted:null};
@@ -341,7 +334,7 @@ function render(){
     S.membersLoaded=true;
     repo.members().then(m=>{S.members=m;render();}).catch(()=>{});
   }
-  view.innerHTML=storageBanner()+(CANWRITE===false?banner('<b>View only.</b> You can read every report here, but entries will not save.'):'')+fn();
+  view.innerHTML=storageBanner()+fn();
   if(S.modal)$('#layer').innerHTML=S.modal(); else $('#layer').innerHTML='';
   wireLive();
   /* phone: the nav is a horizontal strip — keep the active section in view */
@@ -718,7 +711,9 @@ function vStock(){
           <label class="f"><span>Dip stock (L)</span><input type="number" step="1" id="dp_qty" placeholder="from dip chart"></label>
           <button class="btn" data-act="adddip">Record dip</button>
         </div>
-        <div class="setupnote">Recording a dip sets book stock to the measured quantity and logs the difference as gain or loss.</div>
+        <div class="setupnote">Recording a dip sets book stock to the measured quantity and logs the difference as gain or loss.
+          Removing a dip from this list deletes the record but does not rewind the stock — a measurement cannot be un-taken.
+          To correct a wrong dip, record another one with the right figure.</div>
         <div class="tw" style="margin-top:12px"><table>
           <thead><tr><th>Tank</th><th class="r">Book</th><th class="r">Dip</th><th class="r">Variation</th><th class="r">Valued</th><th></th></tr></thead>
           <tbody>${(day.dips||[]).map(d=>{const v=num(d.dip)-num(d.book);return `<tr>
@@ -975,13 +970,16 @@ function vSetup(){
         <td><input type="text" data-tf="name" value="${esc(t.name)}" style="width:130px"></td>
         <td><select data-tf="product">${c.products.map(p=>`<option value="${esc(p.id)}"${p.id===t.product?' selected':''}>${esc(p.short)}</option>`).join('')}</select></td>
         <td class="r"><input type="number" data-tf="capacity" value="${t.capacity}" style="text-align:right"></td>
-        <td class="r"><input type="number" step="0.01" data-tf="stock" value="${t.stock}" style="text-align:right"></td>
+        <td class="r num" title="Book stock is maintained by the database. Correct it with a dip reading under Stock.">${nf(t.stock,2)}</td>
         <td class="r"><input type="number" data-tf="min" value="${t.min||0}" style="text-align:right"></td>
         <td class="r"><button class="x" data-act="deltank" data-id="${esc(t.id)}">✕</button></td></tr>`).join('')
         ||'<tr><td colspan="6" class="empty">No tanks yet.</td></tr>'}
       </tbody></table></div>
       <div class="pb" style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" data-act="savetanks">Save tanks</button>
         <button class="btn ghost" data-act="addtank">Add tank</button></div>
+      <div class="pb" style="padding-top:0"><div class="setupnote" style="margin:0">Book stock is shown, not edited.
+        The database owns it — sales reduce it, decantation raises it — so two people entering shifts at once
+        cannot corrupt it. To correct it, record a dip under <b>Stock</b>; that sets the figure and leaves a trail.</div></div>
     </div>
   </div>
 
@@ -1082,7 +1080,10 @@ let tipEl=null;
 document.addEventListener('mousemove',e=>{
   const hit=e.target.closest?.('#trend .hit');
   if(!hit){if(tipEl){tipEl.remove();tipEl=null;}return;}
-  const c=window.__chart, i=+hit.dataset.i, row=c.data[i]; if(!row)return;
+  /* __chart is written when a chart renders; a stale hit area after a tab
+     switch would otherwise dereference nothing. */
+  const c=window.__chart, i=+hit.dataset.i, row=c?.data?.[i];
+  if(!row){if(tipEl){tipEl.remove();tipEl=null;}return;}
   if(!tipEl){tipEl=document.createElement('div');tipEl.className='tip';$('#layer').appendChild(tipEl);}
   const tot=row.vals.reduce((a,b)=>a+b,0);
   tipEl.innerHTML=`<div class="tt">${dmy(row.date)}</div>`+
@@ -1287,7 +1288,12 @@ function saveShift(close){
   const wasClosed=!!sh.closed;
   sh.operator=$('#f_operator').value.trim();
   sh.closed=close?true:$('#f_closed').value==='1';
-  if(sh.closed&&!sh.closedAt)sh.closedAtISO=new Date().toISOString();
+  /* Stamp the close time once. The database keeps closed_at, and db.js falls
+     back to now() whenever closedAtISO is absent — so without carrying the
+     original forward, every later edit to a closed shift would quietly move
+     its closing time to the moment of the edit. */
+  if(!sh.closed) sh.closedAtISO=null;
+  else if(!sh.closedAtISO) sh.closedAtISO=new Date().toISOString();
   sh.cash=num($('#f_cash').value); sh.card=num($('#f_card').value);
   sh.upi=num($('#f_upi').value);   sh.bank=num($('#f_bank').value);
   sh.other={amount:num($('#f_other').value),cost:num($('#f_othercost').value),note:sh.other?.note||''};

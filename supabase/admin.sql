@@ -695,3 +695,169 @@ revoke execute on function public.bootstrap_platform_admin(text, text, text) fro
 
 -- Future functions should not be world-executable either.
 alter default privileges in schema public revoke execute on functions from public;
+
+-- ============================================================================
+--  12. Hardening the role model
+--
+--  Three defects found in a later audit of schema.sql, fixed here so an
+--  existing deployment only has to re-run this file.
+--
+--  (a) A member could not see a colleague's name. The profiles policy was
+--      `using (id = auth.uid())` for every operation, so Settings → Team
+--      showed a dash against everyone and sat on "Loading the team…".
+--
+--  (b) A MANAGER could promote themselves to owner. add_member() refused it,
+--      but the memberships policy granted managers `for all`, so a direct
+--      PostgREST call — which is all a browser console needs — went straight
+--      through.
+--
+--  (c) A manager could then delete the owner's membership and lock the owner
+--      out of their own bunk. Together, (b) and (c) let a manager take over
+--      a bunk completely.
+-- ============================================================================
+
+-- --- (a) you may read the profile of someone you share a bunk with ---------
+create or replace function public.shares_bunk_with(u uuid)
+returns boolean language sql stable security definer set search_path = public, pg_temp as $$
+  select exists (
+    select 1
+    from public.memberships m1
+    join public.memberships m2 on m1.bunk_id = m2.bunk_id
+    where m1.user_id = auth.uid() and m2.user_id = u
+  );
+$$;
+
+drop policy if exists profiles_self on public.profiles;
+drop policy if exists profiles_read on public.profiles;
+drop policy if exists profiles_write on public.profiles;
+
+-- Read: yourself, and anyone on a bunk you belong to. Nothing wider — a name
+-- and a phone number are not public just because two people use the software.
+create policy profiles_read on public.profiles
+  for select using (id = auth.uid() or public.shares_bunk_with(id));
+
+-- Write: only ever your own row.
+create policy profiles_write on public.profiles
+  for all using (id = auth.uid()) with check (id = auth.uid());
+
+-- --- (b) and (c) a manager may not touch an owner --------------------------
+drop policy if exists memberships_write on public.memberships;
+
+-- The rule, in one place: an owner may do anything to this bunk's team; a
+-- manager may do anything that neither creates nor touches an owner.
+create or replace function public.can_manage_membership(b uuid, target_role public.member_role)
+returns boolean language sql stable security definer set search_path = public, pg_temp as $$
+  select public.has_bunk_role(b, array['owner']::public.member_role[])
+      or (public.has_bunk_role(b, array['manager']::public.member_role[])
+          and target_role <> 'owner');
+$$;
+
+create policy memberships_insert on public.memberships
+  for insert with check (public.can_manage_membership(bunk_id, role));
+
+-- Both sides are checked: `using` is the row as it stands, `with check` the
+-- row as it would become. A manager can therefore neither edit an owner's row
+-- nor promote anyone into one.
+create policy memberships_update on public.memberships
+  for update using (public.can_manage_membership(bunk_id, role))
+         with check (public.can_manage_membership(bunk_id, role));
+
+create policy memberships_delete on public.memberships
+  for delete using (public.can_manage_membership(bunk_id, role));
+
+-- --- a bunk always keeps at least one owner --------------------------------
+create or replace function public.guard_last_owner()
+returns trigger language plpgsql security definer set search_path = public, pg_temp as $$
+declare b uuid; others int;
+begin
+  b := coalesce(old.bunk_id, new.bunk_id);
+
+  -- The bunk itself is being deleted and these rows are cascading with it.
+  if not exists (select 1 from public.bunks where id = b) then
+    return coalesce(new, old);
+  end if;
+
+  -- Only the removal or demotion of an owner can leave a bunk ownerless.
+  if old.role <> 'owner' then return coalesce(new, old); end if;
+  if tg_op = 'UPDATE' and new.role = 'owner' then return new; end if;
+
+  select count(*) into others
+  from public.memberships
+  where bunk_id = b and role = 'owner' and user_id <> old.user_id;
+
+  if others = 0 then
+    raise exception 'A bunk must always have at least one owner. Appoint another owner first.'
+      using errcode = 'check_violation';
+  end if;
+  return coalesce(new, old);
+end $$;
+
+drop trigger if exists memberships_keep_owner on public.memberships;
+create trigger memberships_keep_owner
+  before update or delete on public.memberships
+  for each row execute function public.guard_last_owner();
+
+revoke execute on function public.can_manage_membership(uuid, public.member_role) from public, anon;
+revoke execute on function public.guard_last_owner() from public, anon, authenticated;
+grant execute on function public.shares_bunk_with(uuid) to authenticated;
+
+-- Deleting the only owner of a bunk would strand it, and the trigger above
+-- would refuse halfway through. Say so before anything is removed.
+create or replace function public.admin_delete_account(p_user uuid, p_confirm_email text)
+returns boolean language plpgsql security definer
+set search_path = public, auth, pg_temp as $$
+declare v_email text; v_stranded text;
+begin
+  perform public.require_platform_admin();
+  select email into v_email from auth.users where id = p_user;
+  if v_email is null then raise exception 'No such account.'; end if;
+  if lower(trim(coalesce(p_confirm_email,''))) <> lower(v_email) then
+    raise exception 'Type the account email exactly to confirm deletion.';
+  end if;
+  if p_user = auth.uid() then raise exception 'You cannot delete your own account.'; end if;
+  if exists (select 1 from public.platform_admins where user_id = p_user) then
+    raise exception 'Revoke administrator access before deleting that account.';
+  end if;
+
+  select string_agg(b.name, ', ' order by b.name) into v_stranded
+  from public.memberships m
+  join public.bunks b on b.id = m.bunk_id
+  where m.user_id = p_user and m.role = 'owner'
+    and not exists (
+      select 1 from public.memberships m2
+      where m2.bunk_id = m.bunk_id and m2.role = 'owner' and m2.user_id <> p_user);
+  if v_stranded is not null then
+    raise exception 'This account is the only owner of: %. Give those bunks another owner first, or remove the bunk.', v_stranded;
+  end if;
+
+  perform public.admin_log('delete_account', v_email, jsonb_build_object('user_id', p_user));
+  delete from auth.users where id = p_user;
+  return true;
+end $$;
+grant execute on function public.admin_delete_account(uuid, text) to authenticated;
+
+-- ============================================================================
+--  13. Final sweep
+--  Nothing in BunkSoft is meant to be callable before signing in. Functions
+--  added after section 11 keep Postgres's default grant to PUBLIC, so this
+--  runs last and shuts the anonymous role out of the whole schema — including
+--  anything a future migration adds and forgets to lock down.
+-- ============================================================================
+do $$
+declare r record;
+begin
+  for r in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+  loop
+    -- from public as well as anon: the anonymous role reaches a function
+    -- through Postgres's default PUBLIC grant, so revoking from anon alone
+    -- leaves it wide open. Explicit grants to authenticated survive this.
+    execute format('revoke all on function %s from public, anon', r.sig);
+  end loop;
+end $$;
+
+revoke all on all tables    in schema public from anon;
+revoke all on all sequences in schema public from anon;
+revoke usage on schema public from anon;

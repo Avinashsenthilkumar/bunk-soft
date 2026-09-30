@@ -224,11 +224,15 @@ function screenRefused(email) {
 }
 
 /* ============================== idle timeout ============================ */
-let idleAt = Date.now(), idleTimer = null;
+let idleAt = Date.now(), idleTimer = null, idleBound = false;
 function bumpIdle() { idleAt = Date.now(); }
 function startIdleWatch() {
-  ['click', 'keydown', 'pointerdown', 'wheel'].forEach(ev =>
-    addEventListener(ev, bumpIdle, { passive: true }));
+  /* Signing out and back in must not stack another set of listeners. */
+  if (!idleBound) {
+    ['click', 'keydown', 'pointerdown', 'wheel'].forEach(ev =>
+      addEventListener(ev, bumpIdle, { passive: true }));
+    idleBound = true;
+  }
   clearInterval(idleTimer);
   idleTimer = setInterval(async () => {
     const left = IDLE_LIMIT_MS - (Date.now() - idleAt);
@@ -584,6 +588,9 @@ function detailLine(d) {
 
 /* ================================ modals ================================ */
 function modal(title, body, onOpen) {
+  /* A modal opened from inside another one would otherwise strand the first
+     Escape handler on window, and every modal after it would add one more. */
+  if (modal._esc) removeEventListener('keydown', modal._esc);
   layer.innerHTML = `<div class="modal" role="dialog" aria-modal="true">
     <div class="ph"><h2>${esc(title)}</h2><span class="grow"></span>
       <button class="btn ghost sm" data-act="closemodal">Close</button></div>
@@ -599,7 +606,7 @@ function modal(title, body, onOpen) {
 }
 function closeModal() {
   layer.innerHTML = '';
-  if (modal._esc) removeEventListener('keydown', modal._esc);
+  if (modal._esc) { removeEventListener('keydown', modal._esc); modal._esc = null; }
 }
 
 function modalTeam(bunkId) {
