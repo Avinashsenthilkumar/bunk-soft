@@ -11,11 +11,17 @@
      has no PDF library to load. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in wss://*.supabase.in; object-src 'none'">
 <title>BunkSoft Admin Console</title>
-<link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+<!-- Root-absolute, not relative. At /admin (no trailing slash) the browser
+     takes / as the base directory, so ./admin.css would resolve to /admin.css
+     and the page would load with no stylesheet and no script — a blank screen
+     with nothing in the console to explain it. These work at /admin and
+     /admin/ alike. They assume the site is served from the domain root, which
+     every deployment recipe in the README does. -->
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Mulish:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap">
-<link rel="stylesheet" href="./admin.css">
-<script src="../js/config.js"></script>
+<link rel="stylesheet" href="/admin/admin.css">
+<script src="/js/config.js"></script>
 </head>
 <body>
 
@@ -50,7 +56,7 @@
 <div id="alayer"></div>
 <div id="atoast" class="atoast" hidden></div>
 
-<script type="module" src="./admin.js"></script>
+<script type="module" src="/admin/admin.js"></script>
 <noscript><p style="padding:24px;font:16px system-ui">The admin console needs JavaScript enabled.</p></noscript>
 </body>
 </html>

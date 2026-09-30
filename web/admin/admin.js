@@ -216,7 +216,7 @@ function screenRefused(email) {
     `The account <b>${esc(email || '')}</b> is signed in, but it is not a BunkSoft administrator.`,
     `<p class="authnote">This console manages BunkSoft accounts for Subsel Tech Solutions.
      If you run a petrol bunk, your records are in the main app, not here.</p>
-     <a class="btn wide" href="../" style="display:block;text-align:center;text-decoration:none">Go to the BunkSoft app</a>
+     <a class="btn wide" href="/" style="display:block;text-align:center;text-decoration:none">Go to the BunkSoft app</a>
      <button class="linkbtn" id="ar_out">Sign out of this account</button>`));
   $('#ar_out').onclick = async () => { await sb.auth.signOut(); screenSignIn(''); };
   /* Drop the session after a moment so a walk-away does not leave it live. */
