@@ -14,41 +14,69 @@
 
 export const cfg = window.BUNKSOFT_CONFIG || {};
 
-/* Allow QA to point a deployed build at a database without a rebuild. */
+/* Allow QA to point a deployed build at a database without a rebuild.
+   A filled-in config.js always wins. That ordering matters: if a stored
+   override could outrank it, anything able to write to localStorage on this
+   origin could quietly aim a live deployment at someone else's database and
+   collect every password typed into it. On a configured build the override is
+   not read at all, and any leftover value is cleared. */
 const OVERRIDE_KEY = 'bunksoft.supabase';
+const VALID_URL = /^https:\/\/[a-z0-9-]{1,64}\.supabase\.(co|in)$/i;
+
 export function storedOverride() {
-  try { return JSON.parse(localStorage.getItem(OVERRIDE_KEY) || 'null'); } catch { return null; }
+  try {
+    const o = JSON.parse(localStorage.getItem(OVERRIDE_KEY) || 'null');
+    if (!o || typeof o.url !== 'string' || typeof o.key !== 'string') return null;
+    if (!VALID_URL.test(o.url) || o.key.length < 40) return null;
+    return o;
+  } catch { return null; }
 }
 export function saveOverride(url, key) {
+  if (!VALID_URL.test(String(url || ''))) throw new Error('That is not a Supabase project URL.');
+  if (String(key || '').length < 40) throw new Error('That anon key looks too short.');
   try { localStorage.setItem(OVERRIDE_KEY, JSON.stringify({ url, key })); } catch {}
 }
 export function clearOverride() {
   try { localStorage.removeItem(OVERRIDE_KEY); } catch {}
 }
 
-const ov = storedOverride();
-export const SUPABASE_URL = (ov && ov.url) || cfg.supabaseUrl || '';
-export const SUPABASE_KEY = (ov && ov.key) || cfg.supabaseAnonKey || '';
-export const configured = !!(SUPABASE_URL && SUPABASE_KEY && !/YOUR_/.test(SUPABASE_URL));
+const baked = !!(cfg.supabaseUrl && cfg.supabaseAnonKey && !/YOUR_/.test(cfg.supabaseUrl));
+const ov = baked ? null : storedOverride();
+if (baked) clearOverride();
+
+export const SUPABASE_URL = baked ? cfg.supabaseUrl : ((ov && ov.url) || '');
+export const SUPABASE_KEY = baked ? cfg.supabaseAnonKey : ((ov && ov.key) || '');
+export const configured = !!(SUPABASE_URL && SUPABASE_KEY);
 
 export let sb = null;
 export function initClient(createClient) {
   if (!configured) return null;
   sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    auth: {
+      persistSession: true, autoRefreshToken: true, detectSessionInUrl: true,
+      /* Named so the business app and the admin console cannot ever share a
+         session, even in the same browser. */
+      storageKey: 'bunksoft-app-auth'
+    },
+    global: { headers: { 'x-client-info': 'bunksoft-app' } }
   });
   return sb;
 }
 
+/* The signed-in email, for display only. Never used for a permission check —
+   that is what the database policies are for. */
+export let sessionEmail = '';
+export function setSessionEmail(e) { sessionEmail = e || ''; }
+
 /* ------------------------------------------------------------------ auth -- */
+/* There is no signUp() here. Accounts are created by an administrator in the
+   separate console, so the business app has no code path that can make one. */
 export const auth = {
   async session() { const { data } = await sb.auth.getSession(); return data.session || null; },
   async user() { const { data } = await sb.auth.getUser(); return data.user || null; },
-  signIn: (email, password) => sb.auth.signInWithPassword({ email: email.trim(), password }),
-  signUp: (email, password, fullName) => sb.auth.signUp({
-    email: email.trim(), password, options: { data: { full_name: fullName || '' } }
-  }),
-  reset: (email) => sb.auth.resetPasswordForEmail(email.trim(), { redirectTo: location.origin + location.pathname }),
+  signIn: (email, password) => sb.auth.signInWithPassword({ email: String(email || '').trim().toLowerCase(), password }),
+  reset: (email) => sb.auth.resetPasswordForEmail(String(email || '').trim().toLowerCase(),
+    { redirectTo: new URL('.', location.href).href }),
   signOut: () => sb.auth.signOut(),
   onChange: (fn) => sb.auth.onAuthStateChange((_e, s) => fn(s))
 };
@@ -80,12 +108,9 @@ export const repo = {
 
   myBunks() { return run('my_bunks', sb.rpc('my_bunks')); },
 
-  async createBunk(name, brand, place) {
-    const { data, error } = await sb.rpc('create_bunk',
-      { p_name: name, p_brand: brand || null, p_place: place || null, p_seed: true });
-    if (error) fail('create_bunk', error);
-    return data;
-  },
+  /* createBunk() used to live here. Bunks are now created by an administrator
+     in the /admin/ console, and the database no longer grants create_bunk()
+     to a signed-in user, so calling it from here would fail anyway. */
 
   addMember(email, role) {
     return run('add_member', sb.rpc('add_member', { p_bunk: this.bunkId, p_email: email, p_role: role }));

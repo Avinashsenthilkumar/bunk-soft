@@ -1005,7 +1005,8 @@ function vSetup(){
     <div class="ph"><h2>Team</h2><span class="hint">who can open this bunk</span></div>
     <div class="pb">
       <div class="fr" style="max-width:640px">
-        <label class="f"><span>Email they signed up with</span><input type="email" id="mb_email" placeholder="name@example.com"></label>
+        <label class="f"><span>Their BunkSoft email</span><input type="email" id="mb_email" placeholder="name@example.com"
+          inputmode="email" autocapitalize="none" spellcheck="false"></label>
         <label class="f"><span>Role</span><select id="mb_role">
           <option value="operator">Operator — runs shifts, stock, credit</option>
           <option value="manager">Manager — also edits rates and setup</option>
@@ -1013,7 +1014,9 @@ function vSetup(){
         </select></label>
         <button class="btn" data-act="addmember">Give access</button>
       </div>
-      <div class="setupnote">They must create a BunkSoft account first, then you add them here.</div>
+      <div class="setupnote">Staff cannot sign themselves up. Ask your BunkSoft administrator to create
+        the login, then give it access here. Removing someone here takes away their access to this bunk
+        but leaves their login alone.</div>
       <div class="tw" style="margin-top:12px"><table>
         <thead><tr><th>Name</th><th>Role</th><th>Since</th><th></th></tr></thead>
         <tbody>${(S.members||[]).map(m=>`<tr><td>${esc(m.name)}</td>
@@ -1247,7 +1250,7 @@ document.addEventListener('click',async e=>{
     /* ---- team ---- */
     'addmember':()=>{
       const em=$('#mb_email').value.trim(), role=$('#mb_role').value;
-      if(!em)return toast('Enter the email they signed up with.');
+      if(!em)return toast('Enter their BunkSoft email.');
       return mutate(async()=>{ await repo.addMember(em,role); S.members=await repo.members(); },'Access granted to '+em+'.');
     },
     'delmember':()=>mutate(async()=>{ await repo.removeMember(b.dataset.id); S.members=await repo.members(); },'Access removed.'),

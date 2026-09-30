@@ -25,22 +25,51 @@ await p.route('**/@supabase/supabase-js**', r =>
   r.fulfill({status:200, contentType:'text/javascript',
              body:fs.readFileSync('test/fake-supabase.js','utf8')}));
 // preconfigure so we skip the "connect your database" screen
-await p.addInitScript(()=>{ try{ localStorage.setItem('bunksoft.supabase',
-  JSON.stringify({url:'https://demo.supabase.co',key:'x'.repeat(60)})); }catch(e){} });
+/* config.js may hold a live project; the test must never reach it. */
+await p.route('**/js/config.js', r=>r.fulfill({status:200,contentType:'text/javascript',
+  body:`window.BUNKSOFT_CONFIG={supabaseUrl:'https://demo.supabase.co',supabaseAnonKey:'${'x'.repeat(60)}'};`}));
 
 const ok=(l,v)=>console.log((v?'  PASS  ':'  FAIL  ')+l);
+const shown=async sel=>{ const el=await p.$(sel); return !!el && await el.isVisible(); };
 await p.route('**/fonts.googleapis.com/**',r=>r.fulfill({status:200,contentType:'text/css',body:''}));
 await p.goto('http://127.0.0.1:4173/'); await p.waitForTimeout(700);
 
-console.log('1. Sign up and create a bunk');
-ok('sign-in screen shown', !!(await p.$('#au_email')));
-await p.click('#au_swap'); await p.waitForTimeout(200);
-await p.fill('#au_name','Kumaran'); await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','bunksoft2026');
-await p.click('#au_go'); await p.waitForTimeout(600);
-ok('onboarding shown for a new account', !!(await p.$('#nb_name')));
-await p.fill('#nb_name','Sri Balaji Fuels'); await p.fill('#nb_brand','Indian Oil'); await p.fill('#nb_place','Coimbatore');
-await p.click('#nb_go'); await p.waitForTimeout(1200);
-ok('app shell opened', !(await p.$('#gate:not([hidden])')) && !!(await p.$('[data-tab="dash"]')));
+/* Since self sign-up was removed, the bunk and its owner are created by an
+   administrator. Seed one the way bootstrap_platform_admin() does, then drive
+   the same admin RPC the console calls. */
+console.log('1. An administrator creates the bunk; the owner signs in');
+ok('sign-in screen shown', await shown('#au_email'));
+ok('no self sign-up offered', !/create (an )?account/i.test(await p.textContent('body')));
+
+await p.evaluate(()=>{
+  const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const T=JSON.parse(sessionStorage.getItem('__fakedb')||'null')||{bunks:[],memberships:[],profiles:[],
+    products:[],tanks:[],nozzles:[],business_days:[],shifts:[],readings:[],credit_customers:[],
+    credit_txns:[],fuel_receipts:[],dip_readings:[],expenses:[],cash_deposits:[]};
+  T.profiles.push({id,full_name:'Avinash S'});
+  sessionStorage.setItem('__fakedb',JSON.stringify(T));
+  sessionStorage.setItem('__fakestate',JSON.stringify({
+    users:[{id,email:'admin@subsel.in',password:'Subsel2026Admin',name:'Avinash S',
+            created_at:new Date().toISOString(),suspended:false}],
+    admins:[id], audit:[]}));
+});
+await p.goto('http://127.0.0.1:4173/'); await p.waitForTimeout(500);
+const created = await p.evaluate(async ()=>{
+  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
+  const sb = createClient('https://demo.supabase.co','x'.repeat(60),{auth:{storageKey:'setup'}});
+  await sb.auth.signInWithPassword({email:'admin@subsel.in',password:'Subsel2026Admin'});
+  const r = await sb.rpc('admin_create_business',{p_bunk_name:'Sri Balaji Fuels',
+    p_email:'owner@subsel.com',p_password:'BunkSoft2026x',p_owner_name:'Kumaran',
+    p_brand:'Indian Oil',p_place:'Coimbatore',p_seed:true});
+  return r.error ? {error:r.error.message} : r.data;
+});
+ok('the administrator created the business', !created.error);
+if (created.error) console.log('        ' + created.error);
+
+await p.goto('http://127.0.0.1:4173/'); await p.waitForTimeout(600);
+await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','BunkSoft2026x');
+await p.click('#au_go'); await p.waitForTimeout(1400);
+ok('app shell opened', await shown('[data-tab="dash"]'));
 ok('bunk name in header', (await p.textContent('#hdName')).includes('Sri Balaji'));
 ok('role pill shows Owner', (await p.textContent('#storageDot')).trim()==='Owner');
 ok('3 tanks seeded', (await p.evaluate(()=>window.BunkSoft.S.tanks.length))===3);
@@ -111,11 +140,16 @@ ok('cash book: 25000 open + 20000 cash sales + 10000 recovered - 18000 expense =
 console.log('6. Reports and PDF');
 await p.click('[data-tab="report"]'); await p.waitForTimeout(700);
 ok('P&L rendered', (await p.textContent('#view')).includes('Profit'));
-await p.screenshot({path:'/tmp/claude-0/-home-claude/e1eb8b9e-4c01-55b1-a7b3-b98231a8c851/scratchpad/webapp.png', fullPage:false});
+await p.screenshot({path:'/tmp/bunksoft-app.png', fullPage:false});
 
 console.log('7. Operator cannot change setup');
-await p.evaluate(()=>{ window.__S.users.push({id:'op-1',email:'op@subsel.com',password:'x',name:'Muthu'});
-  window.__T.profiles.push({id:'op-1',full_name:'Muthu S'}); });
+await p.evaluate(async ()=>{
+  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
+  const sb = createClient('https://demo.supabase.co','x'.repeat(60),{auth:{storageKey:'setup2'}});
+  await sb.auth.signInWithPassword({email:'admin@subsel.in',password:'Subsel2026Admin'});
+  await sb.rpc('admin_create_login',{p_email:'op@subsel.com',p_password:'Operator2026x',
+    p_full_name:'Muthu S'});
+});
 await p.click('[data-tab="setup"]'); await p.waitForTimeout(600);
 await p.fill('#mb_email','op@subsel.com'); await p.selectOption('#mb_role','operator');
 await p.click('[data-act="addmember"]'); await p.waitForTimeout(900);

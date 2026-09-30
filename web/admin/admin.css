@@ -1,0 +1,253 @@
+/* ============================================================================
+   BunkSoft Admin Console — standalone styling.
+   Subsel Tech Solutions Pvt Ltd
+
+   Deliberately not app.css. The console is a different tool for a different
+   person, and it should never be possible to mistake one for the other: the
+   bunk app is navy and blue, this is graphite and teal. Keeping the
+   stylesheets separate also means a change to the bunk app's look cannot
+   quietly break this page.
+   ========================================================================== */
+:root{
+  --bg:#F4F6F9; --panel:#FFFFFF; --panel-2:#F7F9FC; --sunk:#EDF1F6;
+  --chrome:#111A26; --chrome-2:#1B2735;
+  --ink:#121C28; --ink-2:#55646F; --ink-3:#8593A0;
+  --line:#E2E8EF; --line-2:#CBD5E0;
+  --accent:#0E7C7B; --accent-2:#139B99; --accent-soft:#DFF1F1;
+  --good:#0E7A4E; --good-soft:#E2F5EC;
+  --bad:#C81E43;  --bad-soft:#FCE3E9;
+  --warn:#B26A06; --warn-soft:#FDF0DB;
+  --shadow:0 1px 2px rgba(18,28,40,.05), 0 6px 18px rgba(18,28,40,.05);
+  --shadow-2:0 18px 48px rgba(17,26,38,.28);
+  --r:12px; --r-sm:8px;
+  --fd:"Poppins",system-ui,-apple-system,Segoe UI,sans-serif;
+  --fb:"Mulish",system-ui,-apple-system,Segoe UI,sans-serif;
+  --fm:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0C121A; --panel:#141D28; --panel-2:#19232F; --sunk:#1D2835;
+  --chrome:#080D14; --chrome-2:#131D28;
+  --ink:#E8EFF6; --ink-2:#A3B2C0; --ink-3:#778796;
+  --line:#243140; --line-2:#334253;
+  --accent:#2BB3B1; --accent-2:#45C9C7; --accent-soft:#12302F;
+  --good:#35B87B; --good-soft:#123020;
+  --bad:#E8657F;  --bad-soft:#331A21;
+  --warn:#D79A34; --warn-soft:#312611;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.28);
+  --shadow-2:0 18px 48px rgba(0,0,0,.55);
+}}
+:root[data-theme="dark"]{
+  --bg:#0C121A; --panel:#141D28; --panel-2:#19232F; --sunk:#1D2835;
+  --chrome:#080D14; --chrome-2:#131D28;
+  --ink:#E8EFF6; --ink-2:#A3B2C0; --ink-3:#778796;
+  --line:#243140; --line-2:#334253;
+  --accent:#2BB3B1; --accent-2:#45C9C7; --accent-soft:#12302F;
+  --good:#35B87B; --good-soft:#123020;
+  --bad:#E8657F;  --bad-soft:#331A21;
+  --warn:#D79A34; --warn-soft:#312611;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.28);
+  --shadow-2:0 18px 48px rgba(0,0,0,.55);
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--fb);font-size:14px;line-height:1.5;
+  -webkit-text-size-adjust:100%}
+h1,h2,h3{margin:0;font-family:var(--fd);font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent-2);outline-offset:2px}
+.num{font-family:var(--fm);font-variant-numeric:tabular-nums;font-weight:500}
+code,.mono{font-family:var(--fm)}
+
+/* ---------- top chrome ---------- */
+.abar{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:10px 18px;background:var(--chrome);color:#EAF2F8;box-shadow:0 1px 0 rgba(255,255,255,.07)}
+.abrand{display:flex;align-items:center;gap:10px;flex:none}
+.amark{width:32px;height:32px;border-radius:9px;background:var(--accent);color:#fff;display:grid;place-items:center;flex:none}
+.amark svg{width:19px;height:19px}
+.atitle{font-family:var(--fd);font-size:17px;font-weight:600;letter-spacing:-.02em;white-space:nowrap}
+.atitle i{font-style:normal;color:#5FD6D4}
+.atitle b{font-weight:600;color:#93A6B6;font-size:13px;letter-spacing:.06em;text-transform:uppercase;margin-left:4px}
+.atabs{display:flex;gap:2px;flex-wrap:wrap}
+.atab{border:0;background:transparent;color:#A9BBCA;padding:7px 12px;border-radius:var(--r-sm);cursor:pointer;
+  font-weight:600;font-size:13.5px;white-space:nowrap}
+.atab:hover{background:rgba(255,255,255,.09);color:#fff}
+.atab[aria-current="true"]{background:var(--accent);color:#fff}
+.aspacer{flex:1}
+.awho{font-size:12.5px;color:#93A6B6;white-space:nowrap;max-width:36vw;overflow:hidden;text-overflow:ellipsis}
+.abtn{border:1px solid var(--line-2);background:var(--accent);color:#fff;border-color:transparent;
+  padding:7px 13px;border-radius:var(--r-sm);cursor:pointer;font-weight:600;font-size:13px}
+.abtn:hover{background:var(--accent-2)}
+.abtn:disabled{opacity:.55;cursor:default}
+.abtn.ghost{background:rgba(255,255,255,.08);color:#D6E3ED;border:1px solid rgba(255,255,255,.14)}
+.abtn.ghost:hover{background:rgba(255,255,255,.16)}
+.abar .abtn{flex:none}
+
+.awrap{max-width:1180px;margin:0 auto;padding:20px 18px 40px;display:flex;flex-direction:column;gap:16px}
+.afoot{max-width:1180px;margin:0 auto;padding:0 18px 28px;font-size:11.5px;color:var(--ink-3)}
+.aidle{color:var(--ink-3)}
+
+/* ---------- panels ---------- */
+.p{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.ph{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line);
+  background:var(--panel-2)}
+.ph h2{font-size:15.5px}
+.ph .hint{font-size:12px;color:var(--ink-3)}
+.ph .grow{flex:1}
+.pb{padding:16px}
+.pb.tight{padding:0}
+
+/* ---------- stat row ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;box-shadow:var(--shadow)}
+.stat .k{font-size:11.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;font-weight:700}
+.stat .v{font-family:var(--fm);font-size:26px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
+.stat .s{font-size:12px;color:var(--ink-2);margin-top:2px}
+
+/* ---------- forms ---------- */
+.fr{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:12px;align-items:end}
+.f{display:flex;flex-direction:column;gap:5px;min-width:0}
+.f>span{font-size:12px;font-weight:700;color:var(--ink-2);letter-spacing:.01em}
+.f input,.f select,.f textarea{background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-sm);
+  padding:9px 11px;width:100%;min-width:0}
+.f input:focus,.f select:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--accent-soft)}
+.f .sub{font-size:11.5px;color:var(--ink-3)}
+.btn{border:0;background:var(--accent);color:#fff;padding:10px 16px;border-radius:var(--r-sm);cursor:pointer;
+  font-weight:700;font-size:13.5px;white-space:nowrap}
+.btn:hover{background:var(--accent-2)}
+.btn:disabled{opacity:.55;cursor:default}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line-2)}
+.btn.ghost:hover{background:var(--sunk)}
+.btn.danger{background:var(--bad)}
+.btn.danger:hover{filter:brightness(1.08)}
+.btn.sm{padding:6px 11px;font-size:12.5px}
+.btn.wide{width:100%}
+.linkbtn{border:0;background:transparent;color:var(--accent);cursor:pointer;font-weight:700;padding:6px 0;font-size:13px}
+.linkbtn:hover{text-decoration:underline}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-3);font-weight:700;
+  background:var(--panel-2);white-space:nowrap;position:sticky;top:0}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel-2)}
+td.r,th.r{text-align:right}
+.empty{padding:26px 16px;text-align:center;color:var(--ink-3)}
+.name{font-weight:700}
+.sub{font-size:12px;color:var(--ink-3)}
+/* Row actions stay on one line so the rows read evenly; the table scrolls
+   sideways if the window is too narrow, and they wrap on a phone instead. */
+.acts{display:flex;gap:5px;flex-wrap:nowrap;justify-content:flex-end}
+.acts .btn.sm{padding:5px 9px;font-size:12px;font-weight:600}
+td:last-child{white-space:nowrap}
+
+/* ---------- pills ---------- */
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;
+  background:var(--sunk);color:var(--ink-2);white-space:nowrap}
+.pill.ok{background:var(--good-soft);color:var(--good)}
+.pill.wr{background:var(--warn-soft);color:var(--warn)}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.ac{background:var(--accent-soft);color:var(--accent)}
+
+/* ---------- notices ---------- */
+.note{background:var(--sunk);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:var(--r-sm);padding:11px 13px;font-size:12.5px;color:var(--ink-2)}
+.note.warn{border-left-color:var(--warn);background:var(--warn-soft);color:var(--warn)}
+.note.bad{border-left-color:var(--bad);background:var(--bad-soft);color:var(--bad)}
+.autherr{background:var(--bad-soft);color:var(--bad);border-radius:var(--r-sm);padding:10px 12px;
+  font-size:13px;font-weight:600;margin-bottom:12px}
+
+/* ---------- handover card: the credentials, shown once ---------- */
+.handover{border:1px solid var(--accent);background:var(--accent-soft);border-radius:var(--r);padding:16px;
+  display:flex;flex-direction:column;gap:12px}
+.handover h3{font-size:14.5px;color:var(--accent)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13.5px}
+.kv dt{color:var(--ink-2);font-weight:700;font-size:12px;padding-top:2px}
+.kv dd{margin:0;font-family:var(--fm);font-weight:600;word-break:break-all}
+
+/* ---------- sign-in ---------- */
+.authwrap{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:16px;padding:32px 18px;max-width:430px;margin:0 auto}
+.authbrand{display:flex;align-items:center;gap:11px}
+.authbrand .amark{width:42px;height:42px;border-radius:11px}
+.authbrand .amark svg{width:25px;height:25px}
+.authbrand .atitle{font-size:22px;color:var(--ink)}
+.authbrand .atitle i{color:var(--accent)}
+.authbrand .atitle b{display:block;margin:2px 0 0;font-size:11px}
+.authcard{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:var(--shadow-2);padding:22px;display:flex;flex-direction:column;gap:13px}
+.authcard h1{font-size:19px}
+.authsub{margin:0;color:var(--ink-2);font-size:13.5px}
+.authnote{margin:0;font-size:12.5px;color:var(--ink-3);line-height:1.55}
+.authfoot{font-size:12.5px;color:var(--ink-2);text-align:center}
+.authcredit{font-size:11px;color:var(--ink-3);text-align:center}
+
+/* ---------- modal ---------- */
+#alayer:empty{display:none}
+#alayer{position:fixed;inset:0;z-index:70;background:rgba(10,16,24,.55);display:grid;place-items:center;
+  padding:18px;overflow-y:auto}
+.modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow-2);
+  width:100%;max-width:520px;max-height:calc(100vh - 36px);overflow-y:auto}
+.modal .ph{position:sticky;top:0}
+.modal .pb{display:flex;flex-direction:column;gap:13px}
+
+/* ---------- toast ---------- */
+.atoast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:90;max-width:min(92vw,520px);
+  background:var(--chrome);color:#EAF2F8;padding:11px 16px;border-radius:var(--r-sm);box-shadow:var(--shadow-2);
+  font-size:13.5px;font-weight:600}
+.atoast.bad{background:var(--bad)}
+
+/* ---------- phone ---------- */
+@media (max-width:720px){
+  .abar{padding:9px 14px;gap:8px}
+  /* Explicit order, or the brand, the buttons and the name land in DOM order
+     and read as a jumble on a narrow bar. */
+  .abrand{order:0}
+  .awho{order:1;flex:1;min-width:0;max-width:none;text-align:right;font-size:11.5px}
+  #a_theme{order:2}
+  #a_out{order:3}
+  .atabs{order:4;width:100%;overflow-x:auto;padding-bottom:2px;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .atabs::-webkit-scrollbar{display:none}
+  .aspacer{display:none}
+  .awrap{padding:14px 14px 32px}
+  .afoot{padding:0 14px 22px}
+  th,td{padding:9px 11px}
+  .acts{justify-content:flex-start;flex-wrap:wrap}
+  td:last-child{white-space:normal}
+  .stat .v{font-size:22px}
+  .ph{padding:12px 14px}
+  .pb{padding:14px}
+
+  /* Seven columns will not fit a phone, and a table you have to drag
+     sideways is a table nobody reads — least of all to find the button that
+     suspends an account. Each row becomes a stacked card instead. */
+  .t-bus, .t-acct, .t-audit,
+  .t-bus tbody, .t-acct tbody, .t-audit tbody{display:block;width:100%}
+  .t-bus thead, .t-acct thead, .t-audit thead{display:none}
+  .t-bus tr, .t-acct tr, .t-audit tr{
+    display:block;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .t-bus tr:last-child, .t-acct tr:last-child, .t-audit tr:last-child{border-bottom:0}
+  .t-bus td, .t-acct td, .t-audit td{
+    display:block;border:0;padding:1px 0;white-space:normal}
+  .t-bus td.r, .t-acct td.r, .t-audit td.r{text-align:left}
+  .t-bus td:last-child, .t-acct td:last-child, .t-audit td:last-child{padding-top:10px}
+  .t-bus td.empty, .t-acct td.empty, .t-audit td.empty{padding:22px 0;text-align:center}
+
+  /* The usage figures are a desk job; the card keeps who, what and the
+     actions. */
+  .t-bus  td:nth-child(3), .t-bus  td:nth-child(4), .t-bus  td:nth-child(5),
+  .t-acct td:nth-child(3), .t-acct td:nth-child(4),
+  .t-audit td:nth-child(5){display:none}
+
+  /* On a card the actions are the reason you opened the page: give them room. */
+  .acts .btn.sm{padding:7px 12px;font-size:12.5px}
+}
+/* Truncated to two letters it says nothing; the console already tells you who
+   you are on the Administrators tab. */
+@media (max-width:560px){ .awho{display:none} }
+@media print{ .abar,.afoot,.acts{display:none} }
