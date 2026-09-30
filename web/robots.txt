@@ -1,0 +1,14 @@
+# BunkSoft — Subsel Tech Solutions Pvt Ltd
+#
+# The whole application sits behind a sign-in, so there is nothing here for a
+# search engine to index. The admin console is called out separately because
+# a well-behaved crawler should never so much as fetch it.
+#
+# This is a request, not a control: robots.txt is advisory, and naming a path
+# here tells anyone who reads the file that the path exists. What actually
+# protects the console is that it refuses every account that is not a platform
+# administrator, and that the database refuses them too.
+
+User-agent: *
+Disallow: /admin/
+Disallow: /

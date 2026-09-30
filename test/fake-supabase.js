@@ -184,32 +184,10 @@ export function createFakeClient(T, state) {
         const b = T.bunks.find(x => x.id === m.bunk_id);
         return b ? { id: b.id, name: b.name, brand: b.brand, place: b.place, role: m.role } : null;
       }).filter(Boolean),
-    create_bunk: ({ p_name, p_brand, p_place, p_seed }) => {
-      const b = { id: uuid(), name: p_name, brand: p_brand, place: p_place, created_by: me(),
-        shift_names: ['Morning', 'Evening'],
-        expense_heads: ['Salaries', 'Electricity', 'Maintenance', 'Bank / POS charges', 'Transport', 'Misc'],
-        created_at: new Date().toISOString() };
-      T.bunks.push(b);
-      T.memberships.push({ bunk_id: b.id, user_id: me(), role: 'owner', created_at: new Date().toISOString() });
-      if (p_seed !== false) {
-        const mk = (code, name, short, sort) => {
-          const p = { id: uuid(), bunk_id: b.id, code, name, short_name: short,
-            sell_rate: 0, buy_rate: 0, sort_order: sort, archived: false };
-          T.products.push(p); return p;
-        };
-        const ms = mk('ms', 'Petrol', 'MS', 1), hsd = mk('hsd', 'Diesel', 'HSD', 2), xp = mk('xp', 'XP-95 Premium', 'XP95', 3);
-        const mt = (name, p, cap, min, sort) => {
-          const t = { id: uuid(), bunk_id: b.id, name, product_id: p.id, capacity: cap,
-            current_stock: 0, min_level: min, sort_order: sort, archived: false };
-          T.tanks.push(t); return t;
-        };
-        const t1 = mt('Tank 1', ms, 12000, 1500, 1), t2 = mt('Tank 2', hsd, 20000, 2500, 2), t3 = mt('Tank 3', xp, 6000, 800, 3);
-        [['DU-1 / N1', ms, t1], ['DU-1 / N2', hsd, t2], ['DU-2 / N3', ms, t1],
-         ['DU-2 / N4', hsd, t2], ['DU-3 / N5', xp, t3]].forEach(([n, p, t], i) =>
-          T.nozzles.push({ id: uuid(), bunk_id: b.id, name: n, product_id: p.id, tank_id: t.id, sort_order: i + 1, archived: false }));
-      }
-      return b.id;
-    },
+    /* Since admin.sql, create_bunk() is not granted to a signed-in user.
+       Fail the way Postgres does, so nothing in the app can quietly depend
+       on a path that no longer exists in production. */
+    create_bunk: () => { throw new Error('permission denied for function create_bunk'); },
     add_member: ({ p_bunk, p_email, p_role }) => {
       const u = state.users.find(x => x.email.toLowerCase() === String(p_email).toLowerCase());
       if (!u) throw new Error('no BunkSoft account for ' + p_email);
@@ -217,8 +195,252 @@ export function createFakeClient(T, state) {
       if (ex) ex.role = p_role;
       else T.memberships.push({ bunk_id: p_bunk, user_id: u.id, role: p_role, created_at: new Date().toISOString() });
       return true;
+    },
+
+    /* ---------------------------------------------------------------------
+       The platform administration layer, mirroring supabase/admin.sql.
+       Every one of these begins with the same check the SQL does, so the
+       tests can prove the refusal as well as the happy path.
+       ------------------------------------------------------------------- */
+    admin_whoami: () => {
+      const u = state.users.find(x => x.id === me());
+      return { user_id: me(), email: u ? u.email : null, name: u ? u.name : null,
+               is_admin: isAdmin() };
+    },
+
+    admin_businesses: () => {
+      if (!isAdmin()) return [];
+      return T.bunks.map(b => {
+        const own = T.memberships.find(m => m.bunk_id === b.id && m.role === 'owner');
+        const u = own ? state.users.find(x => x.id === own.user_id) : null;
+        return {
+          bunk_id: b.id, name: b.name, brand: b.brand, place: b.place, created_at: b.created_at,
+          owner_name: u ? u.name : null, owner_email: u ? u.email : null, owner_id: u ? u.id : null,
+          owner_suspended: !!(u && u.suspended),
+          staff_count: T.memberships.filter(m => m.bunk_id === b.id).length,
+          days_recorded: T.business_days.filter(d => d.bunk_id === b.id).length,
+          shifts_recorded: T.shifts.filter(s => s.bunk_id === b.id).length,
+          last_activity: b.created_at
+        };
+      }).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    },
+
+    admin_accounts: () => {
+      if (!isAdmin()) return [];
+      return state.users.map(u => ({
+        user_id: u.id, email: u.email, full_name: u.name || null, phone: u.phone || null,
+        created_at: u.created_at || new Date().toISOString(), last_sign_in_at: u.last_sign_in_at || null,
+        confirmed: true, suspended: !!u.suspended, is_admin: state.admins.includes(u.id),
+        bunks: T.memberships.filter(m => m.user_id === u.id).map(m => {
+          const b = T.bunks.find(x => x.id === m.bunk_id);
+          return b ? { bunk_id: b.id, name: b.name, role: m.role } : null;
+        }).filter(Boolean)
+      })).sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    },
+
+    admin_stats: () => isAdmin() ? {
+      businesses: T.bunks.length, accounts: state.users.length,
+      suspended: state.users.filter(u => u.suspended).length,
+      admins: state.admins.length,
+      active_this_week: new Set(T.shifts.map(s => s.bunk_id)).size,
+      shifts_this_week: T.shifts.length, signed_up_today: 0
+    } : null,
+
+    admin_audit_log: ({ p_limit } = {}) => isAdmin()
+      ? state.audit.slice().reverse().slice(0, p_limit || 200) : [],
+
+    admin_create_login: ({ p_email, p_password, p_full_name, p_phone }) =>
+      makeLogin(p_email, p_password, p_full_name, p_phone),
+
+    admin_create_business: ({ p_bunk_name, p_email, p_password, p_owner_name, p_brand, p_place, p_phone, p_seed }) => {
+      needAdmin();
+      if (!String(p_bunk_name || '').trim()) throw new Error('The bunk needs a name.');
+      const uid = makeLogin(p_email, p_password, p_owner_name, p_phone);
+      const bunk = seedBunk(String(p_bunk_name).trim(), p_brand, p_place, uid, p_seed !== false);
+      log('create_business', String(p_bunk_name).trim(), { owner: norm(p_email) });
+      return { user_id: uid, bunk_id: bunk.id, email: norm(p_email), bunk: bunk.name };
+    },
+
+    admin_create_staff: ({ p_bunk, p_email, p_password, p_role, p_full_name, p_phone }) => {
+      needAdmin();
+      const b = T.bunks.find(x => x.id === p_bunk);
+      if (!b) throw new Error('No such bunk.');
+      const uid = makeLogin(p_email, p_password, p_full_name, p_phone);
+      setMember(p_bunk, uid, p_role);
+      log('create_staff', norm(p_email), { bunk: b.name, role: p_role });
+      return { user_id: uid, email: norm(p_email), bunk: b.name, role: p_role };
+    },
+
+    admin_set_password: ({ p_user, p_password }) => {
+      needAdmin(); checkPassword(p_password);
+      const u = state.users.find(x => x.id === p_user);
+      if (!u) throw new Error('No such account.');
+      if (state.admins.includes(p_user) && p_user !== me())
+        throw new Error('Another administrator must change their own password.');
+      u.password = p_password;
+      log('set_password', u.email, {});
+      return true;
+    },
+
+    admin_set_suspended: ({ p_user, p_suspended }) => {
+      needAdmin();
+      const u = state.users.find(x => x.id === p_user);
+      if (!u) throw new Error('No such account.');
+      if (p_user === me()) throw new Error('You cannot suspend your own account.');
+      if (p_suspended && state.admins.includes(p_user))
+        throw new Error('Remove administrator access before suspending that account.');
+      u.suspended = !!p_suspended;
+      log(p_suspended ? 'suspend' : 'reactivate', u.email, {});
+      return true;
+    },
+
+    admin_delete_account: ({ p_user, p_confirm_email }) => {
+      needAdmin();
+      const u = state.users.find(x => x.id === p_user);
+      if (!u) throw new Error('No such account.');
+      if (norm(p_confirm_email) !== norm(u.email))
+        throw new Error('Type the account email exactly to confirm deletion.');
+      if (p_user === me()) throw new Error('You cannot delete your own account.');
+      if (state.admins.includes(p_user))
+        throw new Error('Revoke administrator access before deleting that account.');
+      log('delete_account', u.email, {});
+      state.users.splice(state.users.indexOf(u), 1);
+      T.memberships = T.memberships.filter(m => m.user_id !== p_user);
+      return true;
+    },
+
+    admin_set_member: ({ p_bunk, p_user, p_role }) => {
+      needAdmin();
+      const u = state.users.find(x => x.id === p_user), b = T.bunks.find(x => x.id === p_bunk);
+      if (!u || !b) throw new Error('No such account or bunk.');
+      setMember(p_bunk, p_user, p_role);
+      log('set_member', u.email, { bunk: b.name, role: p_role });
+      return true;
+    },
+
+    admin_remove_member: ({ p_bunk, p_user }) => {
+      needAdmin();
+      const u = state.users.find(x => x.id === p_user), b = T.bunks.find(x => x.id === p_bunk);
+      T.memberships = T.memberships.filter(m => !(m.bunk_id === p_bunk && m.user_id === p_user));
+      log('remove_member', u ? u.email : p_user, { bunk: b ? b.name : '' });
+      return true;
+    },
+
+    admin_delete_bunk: ({ p_bunk, p_confirm_name }) => {
+      needAdmin();
+      const b = T.bunks.find(x => x.id === p_bunk);
+      if (!b) throw new Error('No such bunk.');
+      if (norm(p_confirm_name) !== norm(b.name))
+        throw new Error('Type the bunk name exactly to confirm deletion.');
+      log('delete_bunk', b.name, {});
+      T.bunks.splice(T.bunks.indexOf(b), 1);
+      ['memberships','products','tanks','nozzles','business_days','shifts','readings',
+       'credit_customers','credit_txns','fuel_receipts','dip_readings','expenses','cash_deposits']
+        .forEach(t => { T[t] = T[t].filter(r => r.bunk_id !== p_bunk); });
+      return true;
+    },
+
+    admin_grant_admin: ({ p_email, p_note }) => {
+      needAdmin();
+      const u = state.users.find(x => norm(x.email) === norm(p_email));
+      if (!u) throw new Error('No BunkSoft account for ' + norm(p_email) + '.');
+      if (!state.admins.includes(u.id)) state.admins.push(u.id);
+      log('grant_admin', u.email, { note: p_note || '' });
+      return true;
+    },
+
+    admin_revoke_admin: ({ p_user }) => {
+      needAdmin();
+      if (p_user === me()) throw new Error('You cannot revoke your own administrator access.');
+      if (state.admins.length <= 1) throw new Error('There must always be at least one administrator.');
+      const u = state.users.find(x => x.id === p_user);
+      state.admins = state.admins.filter(id => id !== p_user);
+      log('revoke_admin', u ? u.email : p_user, {});
+      return true;
     }
   };
+
+  /* ---- shared by the admin RPCs above ---- */
+  const norm = e => String(e || '').trim().toLowerCase();
+  const isAdmin = () => !!me() && state.admins.includes(me());
+  function needAdmin() {
+    if (!me()) throw new Error('Sign in first.');
+    if (!isAdmin()) throw new Error('Administrator access required.');
+  }
+  function checkPassword(p) {
+    if (!p || String(p).length < 10) throw new Error('Password must be at least 10 characters.');
+    if (!/[A-Za-z]/.test(p) || !/[0-9]/.test(p))
+      throw new Error('Password must contain both letters and digits.');
+  }
+  function log(action, target, detail) {
+    const u = state.users.find(x => x.id === me());
+    state.audit.push({ at: new Date().toISOString(), actor_email: u ? u.email : null,
+                       action, target, detail: detail || {} });
+  }
+  function makeLogin(email, password, name, phone) {
+    needAdmin();
+    const e = norm(email);
+    if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(e)) throw new Error('That is not a valid email address.');
+    checkPassword(password);
+    if (state.users.some(u => norm(u.email) === e)) throw new Error('An account already exists for ' + e + '.');
+    const u = { id: uuid(), email: e, password, name: name || e.split('@')[0], phone: phone || null,
+                created_at: new Date().toISOString(), suspended: false };
+    state.users.push(u);
+    T.profiles.push({ id: u.id, full_name: u.name });
+    log('create_login', e, { name: name || '' });
+    return u.id;
+  }
+  function setMember(bunkId, userId, role) {
+    const ex = T.memberships.find(m => m.bunk_id === bunkId && m.user_id === userId);
+    if (ex) ex.role = role;
+    else T.memberships.push({ bunk_id: bunkId, user_id: userId, role,
+                              created_at: new Date().toISOString() });
+  }
+  function seedBunk(name, brand, place, ownerId, seed) {
+    const b = { id: uuid(), name, brand: brand || null, place: place || null, created_by: ownerId,
+      shift_names: ['Morning', 'Evening'],
+      expense_heads: ['Salaries', 'Electricity', 'Maintenance', 'Bank / POS charges', 'Transport', 'Misc'],
+      created_at: new Date().toISOString() };
+    T.bunks.push(b);
+    setMember(b.id, ownerId, 'owner');
+    if (seed) {
+      const mk = (code, nm, short, sort) => {
+        const p = { id: uuid(), bunk_id: b.id, code, name: nm, short_name: short,
+          sell_rate: 0, buy_rate: 0, sort_order: sort, archived: false };
+        T.products.push(p); return p;
+      };
+      const ms = mk('ms','Petrol','MS',1), hsd = mk('hsd','Diesel','HSD',2), xp = mk('xp','XP-95 Premium','XP95',3);
+      const mt = (nm, p, cap, min, sort) => {
+        const t = { id: uuid(), bunk_id: b.id, name: nm, product_id: p.id, capacity: cap,
+          current_stock: 0, min_level: min, sort_order: sort, archived: false };
+        T.tanks.push(t); return t;
+      };
+      const t1 = mt('Tank 1', ms, 12000, 1500, 1), t2 = mt('Tank 2', hsd, 20000, 2500, 2),
+            t3 = mt('Tank 3', xp, 6000, 800, 3);
+      [['DU-1 / N1', ms, t1], ['DU-1 / N2', hsd, t2], ['DU-2 / N3', ms, t1],
+       ['DU-2 / N4', hsd, t2], ['DU-3 / N5', xp, t3]].forEach(([n, p, t], i) =>
+        T.nozzles.push({ id: uuid(), bunk_id: b.id, name: n, product_id: p.id, tank_id: t.id,
+                         sort_order: i + 1, archived: false }));
+    }
+    return b;
+  }
+
+  /* The harness navigates between the app and the admin console, which would
+     otherwise wipe these in-memory tables. Park them in sessionStorage so one
+     page's work is still there on the next.
+
+     Defined and published BEFORE the return below — after it, the assignment
+     would be unreachable and every write made through rpc() or from() would
+     be lost on the next navigation. */
+  function save() {
+    try {
+      sessionStorage.setItem('__fakedb', JSON.stringify(T));
+      sessionStorage.setItem('__fakestate', JSON.stringify({
+        users: state.users, admins: state.admins, audit: state.audit
+      }));
+    } catch {}
+  }
+  __save = save;
 
   return {
     from: builder,
@@ -230,29 +452,103 @@ export function createFakeClient(T, state) {
       getSession: async () => ({ data: { session: state.user ? { user: { id: state.user, email: state.email } } : null } }),
       getUser: async () => ({ data: { user: state.user ? { id: state.user, email: state.email } : null } }),
       signInWithPassword: async ({ email, password }) => {
-        const u = state.users.find(x => x.email === email && x.password === password);
+        const u = state.users.find(x => x.email === String(email).toLowerCase() && x.password === password);
         if (!u) return { data: {}, error: { message: 'Invalid login credentials' } };
+        /* A suspended account is refused, the way GoTrue refuses a banned one. */
+        if (u.suspended) return { data: {}, error: { message: 'User is banned' } };
+        u.last_sign_in_at = new Date().toISOString();
         state.user = u.id; state.email = u.email;
-        if (!T.profiles.find(p => p.id === u.id)) T.profiles.push({ id: u.id, full_name: u.name || email.split('@')[0] });
-        return { data: { session: { user: { id: u.id, email } } }, error: null };
+        if (!T.profiles.find(p => p.id === u.id))
+          T.profiles.push({ id: u.id, full_name: u.name || u.email.split('@')[0] });
+        save();
+        return { data: { session: { user: { id: u.id, email: u.email } } }, error: null };
       },
-      signUp: async ({ email, password, options }) => {
-        if (state.users.find(x => x.email === email)) return { data: {}, error: { message: 'User already registered' } };
-        const u = { id: uuid(), email, password, name: options?.data?.full_name || '' };
-        state.users.push(u);
-        T.profiles.push({ id: u.id, full_name: u.name || email.split('@')[0] });
-        state.user = u.id; state.email = email;
-        return { data: { session: { user: { id: u.id, email } }, user: { id: u.id } }, error: null };
+      /* No signUp(). Self sign-up is gone from the product, so the fake must
+         not offer a door the real backend has bricked up. */
+      updateUser: async ({ password }) => {
+        const u = state.users.find(x => x.id === state.user);
+        if (!u) return { data: {}, error: { message: 'Not signed in' } };
+        if (!password || password.length < 10)
+          return { data: {}, error: { message: 'Password should be at least 10 characters' } };
+        u.password = password; save();
+        return { data: { user: { id: u.id } }, error: null };
       },
       resetPasswordForEmail: async () => ({ data: {}, error: null }),
-      signOut: async () => { state.user = null; state.email = ''; return { error: null }; },
+      signOut: async () => { state.user = null; state.email = ''; save(); return { error: null }; },
       onAuthStateChange: (fn) => { state.onChange = fn; return { data: { subscription: { unsubscribe() {} } } }; }
     }
   };
+
 }
 
-export function createClient(_url, _key) {
-  window.__T = window.__T || makeDb();
-  window.__S = window.__S || { user: null, email: '', users: [] };
-  return createFakeClient(window.__T, window.__S);
+let __save = () => {};
+
+/* One signed-in session per storageKey, the way two Supabase clients on the
+   same origin behave. Without this the admin console and the bunk app would
+   appear to share a login — exactly what the real build prevents, so the fake
+   must not paper over it. */
+function sessionSlot(key) {
+  const k = '__fakesess:' + key;
+  return {
+    get() { try { return JSON.parse(sessionStorage.getItem(k) || 'null'); } catch { return null; } },
+    set(v) { try { v ? sessionStorage.setItem(k, JSON.stringify(v)) : sessionStorage.removeItem(k); } catch {} }
+  };
+}
+
+export function createClient(_url, _key, opts) {
+  const storageKey = (opts && opts.auth && opts.auth.storageKey) || 'sb-default';
+
+  /* Tables and the account directory are shared — there is one database. */
+  if (!window.__T) {
+    let t = null, s = null;
+    try {
+      t = JSON.parse(sessionStorage.getItem('__fakedb') || 'null');
+      s = JSON.parse(sessionStorage.getItem('__fakestate') || 'null');
+    } catch {}
+    window.__T = t || makeDb();
+    window.__DIR = s || {};
+    window.__DIR.users  = window.__DIR.users  || [];
+    window.__DIR.admins = window.__DIR.admins || [];
+    window.__DIR.audit  = window.__DIR.audit  || [];
+  }
+  const dir = window.__DIR;
+  const slot = sessionSlot(storageKey);
+
+  /* Shared directory, private session. */
+  const state = { users: dir.users, admins: dir.admins, audit: dir.audit, onChange: null };
+  Object.defineProperty(state, 'user', {
+    get: () => (slot.get() || {}).id || null,
+    set: v => { const s = slot.get() || {}; slot.set(v ? { id: v, email: s.email || '' } : null); }
+  });
+  Object.defineProperty(state, 'email', {
+    get: () => (slot.get() || {}).email || '',
+    set: v => { const s = slot.get() || {}; slot.set(s.id ? { id: s.id, email: v } : null); }
+  });
+  window.__S = state;
+
+  const client = createFakeClient(window.__T, state);
+
+  /* Persist after every call, so a navigation never loses a write. */
+  const wrap = obj => new Proxy(obj, {
+    get(t, k) {
+      const v = t[k];
+      if (typeof v !== 'function') return v;
+      return (...a) => {
+        const r = v.apply(t, a);
+        __save();
+        return (r && typeof r.then === 'function') ? r.then(x => { __save(); return x; }) : r;
+      };
+    }
+  });
+  return {
+    ...client,
+    auth: wrap(client.auth),
+    rpc: (...a) => client.rpc(...a).then(r => { __save(); return r; }),
+    from: (t) => {
+      const bld = client.from(t);
+      const th = bld.then.bind(bld);
+      bld.then = (res, rej) => th(x => { __save(); return x; }, rej).then(res, rej);
+      return bld;
+    }
+  };
 }

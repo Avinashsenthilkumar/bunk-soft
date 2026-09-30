@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="description" content="BunkSoft — petrol bunk management: sales, stock, expenses, PL reports and credit. By Subsel Tech Solutions.">
 <meta name="theme-color" content="#0A2A5C">
+<!-- The real policy is the Content-Security-Policy header (web/_headers,
+     netlify.toml, vercel.json, deploy/nginx.conf). This copy travels with the
+     file, so the page is still protected on a host that sends no headers at
+     all. frame-ancestors cannot be set from a meta tag, which is why
+     X-Frame-Options stays in the header set. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in wss://*.supabase.in; manifest-src 'self'; worker-src 'self'; object-src 'none'">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="robots" content="noindex,nofollow">
 <title>BunkSoft — Petrol Bunk Management</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">

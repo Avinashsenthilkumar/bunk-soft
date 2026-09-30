@@ -1,14 +1,22 @@
+-- Fixtures are built as the database owner, the way an administrator creating
+-- an account does. Since admin.sql, create_bunk() is no longer callable by a
+-- signed-in user, so the setup cannot pretend to be one.
+--
+-- The flag lets the fixtures write straight into auth.users when
+-- lock_signups.sql is installed. It is scoped to this session and does not
+-- weaken the lock for anyone else.
 \set QUIET on
+set bunksoft.allow_direct_signup = 'on';
 insert into auth.users(id,email) values
  ('11111111-1111-1111-1111-111111111111','a@t.com'),
  ('22222222-2222-2222-2222-222222222222','b@t.com'),
  ('33333333-3333-3333-3333-333333333333','op@t.com');
-set role authenticated;
 set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
 select public.create_bunk('Sri Balaji Fuels','Indian Oil','Coimbatore') as a \gset
 set request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
 select public.create_bunk('Anand Fuel Point','BPCL','Madurai') as b \gset
 set request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+set role authenticated;
 \set QUIET off
 
 \echo '--- A writes into B bunk (must fail) ---'

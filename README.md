@@ -7,24 +7,56 @@ readings, tank stock, credit book, expenses, cash reconciliation and PDF
 reports. Each bunk's data is isolated at the database level, and staff get
 roles — the owner sees profit, the operator runs the forecourt.
 
+BunkSoft is sold, not signed up for. Nobody creates their own login. Subsel
+creates the account for each bunk that buys the software, from a separate
+**admin console** that customers never see.
+
 - **Frontend** — static HTML/CSS/JS. No build step, no framework, no bundler.
 - **Backend** — Supabase (PostgreSQL + Auth). Row-level security does the
   tenant isolation; triggers own tank stock so it cannot drift.
 - **Hosting** — any static host. Netlify, Vercel, Cloudflare Pages, S3,
   Nginx, or a folder on your own server.
 
+```
+/          the bunk application — owners, managers and operators sign in
+/admin/    the administration console — Subsel staff only
+```
+
 ---
 
-## 1. Create the database (5 minutes)
+## 1. Create the database
 
 1. Go to [supabase.com](https://supabase.com) → **New project**.
    Pick a region close to your customers (Mumbai or Singapore for India).
    Save the database password somewhere safe.
-2. Open **SQL Editor** → **New query**.
-3. Paste the whole of [`supabase/schema.sql`](supabase/schema.sql) and press **Run**.
-   It creates every table, view, trigger, function and security policy.
-   Running it twice is safe.
-4. Open **Project Settings → API** and copy two values:
+2. Open **SQL Editor** → **New query** and run these three files, in order.
+   Each one is safe to run again.
+
+   | File | What it does |
+   |---|---|
+   | [`supabase/schema.sql`](supabase/schema.sql) | Tables, triggers, views and the tenant security policies |
+   | [`supabase/admin.sql`](supabase/admin.sql) | The administration layer: who is an admin, and the functions that create accounts |
+   | [`supabase/lock_signups.sql`](supabase/lock_signups.sql) | Optional but recommended — refuses any account not created by an administrator |
+
+3. Create the first administrator. Run this once, with your own details:
+
+   ```sql
+   select public.bootstrap_platform_admin(
+     'admin@subsel.in',      -- your email; this is your username
+     'ChangeThisNow2026',    -- at least 10 characters, letters and digits
+     'Avinash S');
+   ```
+
+   It refuses to run a second time, so nobody can use it to seize the console
+   later. Sign in at `/admin/` afterwards and change that password under
+   **Administrators → Your own password**.
+
+4. Turn off self sign-up in the dashboard: **Authentication → Sign In / Providers
+   → Email → Allow new users to sign up: off**. `lock_signups.sql` enforces this
+   in the database as well, but the dashboard toggle is the setting people
+   look at, so set both.
+
+5. Open **Project Settings → API** and copy two values:
    - **Project URL** — `https://xxxxxxxx.supabase.co`
    - **anon public** key — a long `eyJ…` string
 
@@ -33,66 +65,67 @@ roles — the owner sees profit, the operator runs the forecourt.
 It is *designed* to be public and sits in the browser of every web app built
 on Supabase. What protects your data is row-level security, which `schema.sql`
 sets up: a signed-in user can only read or write rows belonging to a bunk they
-are a member of. **Never put the `service_role` key in the frontend** — it
-bypasses all of that.
+are a member of.
 
-### Email settings
-
-By default Supabase asks new users to confirm their email. For a pilot you may
-want that off: **Authentication → Providers → Email → Confirm email**. For
-production, leave it on and set your own SMTP under **Project Settings → Auth**
-so mail comes from your domain rather than Supabase's shared sender.
+**Never put the `service_role` key anywhere in `web/`.** It bypasses every
+policy. BunkSoft never needs it: creating logins happens inside the database,
+in `security definer` functions that check who is calling. That is the whole
+reason the admin console can be a static page.
 
 ---
 
 ## 2. Configure the app
 
-Edit `web/js/config.js`:
+Edit [`web/js/config.js`](web/js/config.js):
 
 ```js
 window.BUNKSOFT_CONFIG = {
-  supabaseUrl:     'sb_publishable_-XTDhRbOWpe_vQ8H3fL_Hg_PPgD0_Kq',
-  supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2bHFycWpjYmllY3ljcHVybnN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA1ODkyMjYsImV4cCI6MjEwNjE2NTIyNn0.K_Hhiqz5ZB8oWfC6wASoD9uwOzCaswmfhmUOG37Usvs'
+  supabaseUrl:     'https://xxxxxxxx.supabase.co',
+  supabaseAnonKey: 'eyJhbGciOi…'
 };
 ```
 
-That is the only file you change to point a build at a database.
+That is the only file you change to point a build at a database, and both
+pages read it.
 
-> If you deploy without filling this in, the app shows a **Connect your
+Rather not commit it? Generate it at build time instead:
+
+```
+Build command:  node scripts/write-config.mjs
+Environment:    SUPABASE_URL, SUPABASE_ANON_KEY
+```
+
+The script refuses to write a `service_role` key into a file served to
+browsers, and refuses a URL that is not a Supabase project.
+
+> On a build with `config.js` still unfilled, the app shows a **Connect your
 > database** screen where a tester can paste the two values, stored in that
-> browser only. Handy for QA; fill in `config.js` for anything real.
+> browser only. Once `config.js` is filled in that override is ignored and
+> cleared — otherwise anything able to write to `localStorage` could point a
+> live deployment at someone else's database and harvest every password typed
+> into it.
 
 ---
 
 ## 3. Deploy
 
-The `web/` folder *is* the site. Nothing to compile.
-
-**Fastest, no account needed** — go to [app.netlify.com/drop](https://app.netlify.com/drop)
-and drag the `web` folder onto the page. You get a public HTTPS URL in about
-ten seconds. Good enough to hand to QA.
+The `web/` folder *is* the site, `/admin/` included. Nothing to compile.
 
 **Netlify or Cloudflare Pages, from Git**
-- Build command: *(leave empty)*
+- Build command: *(leave empty, or `node scripts/write-config.mjs`)*
 - Publish directory: `web`
 
-**Vercel** — `vercel --prod` from the repo root; `vercel.json` already points
-at `web/`.
+Both read [`web/_headers`](web/_headers); Netlify also reads
+[`netlify.toml`](netlify.toml). The two agree, so either route gives the same
+security headers.
 
-**Your own Nginx**
+**Vercel** — `vercel --prod` from the repo root; [`vercel.json`](vercel.json)
+points at `web/` and carries the same headers.
 
-```nginx
-server {
-  listen 443 ssl http2;
-  server_name bunksoft.subsel.com;
-  root /var/www/bunksoft/web;
-  index index.html;
-  location / { try_files $uri $uri/ /index.html; }
-  location ~* \.(?:css|js|svg|png|webmanifest)$ { expires 7d; }
-}
-```
+**Your own Nginx** — copy [`deploy/nginx.conf`](deploy/nginx.conf), adjust
+`server_name` and `root`, then `nginx -t && systemctl reload nginx`.
 
-**Custom domain** — point `bunksoft.subsel.com` at the host and add the domain
+**Custom domain** — point `bunksoft.subsel.in` at the host and add the domain
 in its dashboard. Then add that origin under Supabase **Authentication → URL
 Configuration → Site URL / Redirect URLs**, or password-reset links will
 bounce.
@@ -100,17 +133,79 @@ bounce.
 HTTPS is required — the service worker and installable-app behaviour only
 work over TLS.
 
+> **Whichever host you pick, check the headers actually arrived.** A missing
+> Content-Security-Policy is invisible until it matters. `curl -sI
+> https://your-domain/ | grep -i content-security-policy` should print a long
+> line. `node test/headers.mjs` checks the rules locally, including that all
+> four copies of the policy still agree.
+
 ---
 
-## 4. First run
+## 4. Running the business: the admin console
 
-1. Open the site → **Create an account**.
-2. Name the bunk, the oil company and the town. You get three tanks and five
-   nozzles seeded; rename them under **Settings**.
-3. Set your selling and purchase rates under **Settings → Products & rates**.
-   Nothing computes a margin until you do.
-4. **Settings → Team**: staff sign up themselves first, then you add them by
-   the email they used.
+Go to `/admin/` and sign in with the administrator account you bootstrapped.
+The console is not linked from the app, is marked `noindex`, is never cached,
+and refuses any account that is not a platform administrator.
+
+**A new customer**
+
+*Overview → Add a business*: the bunk's name, oil company and town, then the
+owner's name and email. The email is their username. Press **New password**
+for a strong one, or type your own.
+
+Creating it makes the login and the bunk together, seeded with three tanks and
+five nozzles, and shows a card with the sign-in address, username and
+password. **That card is the only time the password is visible** — it is
+stored as a bcrypt hash and cannot be read back. Copy it, send it to the
+customer, press Done. If it is lost, set a new one; you are not recovering the
+old one.
+
+**Their staff**
+
+*Businesses → Team → Add someone to this bunk*. Operators run shifts, stock
+and credit; managers also edit rates and setup; owners have full control. You
+can also create a login with no bunk yet under *Accounts*, and attach it later.
+
+The bunk's own owner can still grant and remove access to their own bunk under
+**Settings → Team** in the app — but only for people whose login already
+exists, because only you can create one.
+
+**When someone stops paying**
+
+*Suspend*, not *Remove*. Suspending blocks the sign-in and leaves every record
+untouched; reactivating takes one click. **Remove** destroys the bunk and its
+entire history, which is why it makes you type the name back first.
+
+**Activity**
+
+Every administrative action — accounts created, passwords reset, suspensions,
+admin access granted — is recorded with who did it and when. The log cannot be
+edited or deleted through the API by anyone, administrators included.
+
+**What an administrator cannot see**
+
+Deliberately: any bunk's sales, cash, credit or expense rows. Row-level
+security still applies to you. The console shows who the customers are, who
+their staff are, when they last used it and how many days they have recorded —
+enough to run the business of selling the software, and no more. The test
+suite checks this, so it stays true.
+
+**More Subsel staff**
+
+*Administrators → Grant administrator access*, by the email of a login that
+already exists. An administrator cannot revoke their own access, cannot change
+another administrator's password, and the last one cannot be removed.
+
+---
+
+## 5. First run, for the customer
+
+1. They open the site and sign in with what you gave them.
+2. **Settings → Products & rates** — selling and purchase rates.
+   Nothing computes a margin until they do.
+3. **Settings** — rename the seeded tanks and nozzles to match the forecourt.
+4. **Settings → Team** — give their staff access, once you have created those
+   logins.
 5. Start the day: **Sales Entry** → closing meter readings → collections →
    *Save & close shift*. The closing report opens automatically.
 
@@ -118,16 +213,90 @@ work over TLS.
 
 ## Roles
 
-| | Operator | Manager | Owner |
-|---|---|---|---|
-| Shifts, readings, credit slips, expenses, stock, cash | yes | yes | yes |
-| Reports and PDFs | yes | yes | yes |
-| Rates, products, tanks, nozzles, bunk settings | **no** | yes | yes |
-| Add and remove staff | no | yes | yes |
-| Delete the bunk | no | no | yes |
+| | Operator | Manager | Owner | Platform admin |
+|---|---|---|---|---|
+| Shifts, readings, credit slips, expenses, stock, cash | yes | yes | yes | **no** |
+| Reports and PDFs | yes | yes | yes | **no** |
+| Rates, products, tanks, nozzles, bunk settings | no | yes | yes | no |
+| Grant access to their own bunk | no | yes | yes | yes |
+| Create a BunkSoft login | **no** | **no** | **no** | yes |
+| Create or remove a bunk | no | no | no | yes |
+| Suspend an account | no | no | no | yes |
 
 Enforced in the database, not just hidden in the interface — an operator
-calling the API directly still cannot change a rate.
+calling the API directly still cannot change a rate, and a bunk owner calling
+it cannot create an account.
+
+---
+
+## Security
+
+What protects a BunkSoft deployment, and where each piece lives.
+
+**Tenant isolation.** Every table is scoped to a bunk and guarded by row-level
+security. A signed-in user reads and writes only rows belonging to a bunk they
+are a member of. Platform administrators are not exempt. `supabase/schema.sql`,
+proved by `supabase/test_rls.sql`.
+
+**No self sign-up**, in three layers, because one is a setting somebody can
+flip back:
+1. The app has no sign-up screen, and `db.js` has no `signUp()` to call.
+2. The Supabase dashboard toggle is off.
+3. `lock_signups.sql` puts a trigger on `auth.users` that refuses any insert
+   not made by `admin_create_login()`. A hand-made POST to `/auth/v1/signup`
+   fails in the database, whatever the dashboard says.
+
+**Account creation without a secret in the browser.** The admin console holds
+no privileged key. Creating a login runs in `security definer` functions that
+check `is_platform_admin()` before doing anything. Patching the console's
+JavaScript to skip its own gate gains nothing — the refusal is on the server.
+
+**Least privilege for the anonymous role.** Postgres grants `EXECUTE` on every
+new function to `PUBLIC`, which on Supabase includes the anonymous role.
+`admin.sql` revokes that across the whole schema and hands back only what each
+role needs. `create_bunk()` is no longer callable by a signed-in user at all.
+
+**Passwords.** Bcrypt at cost 10, matching what Supabase's own auth service
+writes — pgcrypto's default of 6 would have been weaker than the hashes
+alongside it. Minimum ten characters with letters and digits, enforced in the
+database so it holds however the function is called. The generator avoids
+`0/O` and `1/l/I`, because these get read off a slip of paper.
+
+**Content-Security-Policy.** `default-src 'none'` and a named list of
+everywhere the page may load code from or talk to. No inline script is
+permitted, and `connect-src` reaches only Supabase — so a script injected by
+any means cannot fetch a payload or post your customers' data anywhere. The
+console gets a tighter policy again. Kept identical in `web/_headers`,
+`netlify.toml`, `vercel.json` and `deploy/nginx.conf`, with a copy in each
+page's `<meta>` so the policy survives a host that sends no headers.
+`test/headers.mjs` checks all four still agree and that neither page trips its
+own policy.
+
+Also set: HSTS for a year, `X-Frame-Options: DENY` and `frame-ancestors 'none'`
+(no clickjacking), `nosniff`, a `Permissions-Policy` that switches off camera,
+microphone and location, `Cross-Origin-Opener-Policy`, and `no-store` plus
+`noindex` on `/admin/`.
+
+**Sessions.** The console keeps its session in `sessionStorage` under its own
+key: closing the tab ends it, and an admin session can never be confused with
+a bunk session in the same browser. It signs itself out after 20 minutes idle.
+
+**The service worker** never caches `/admin/`, and only caches a good
+same-origin response — an error page saved into the cache would be served for
+as long as the cache lived.
+
+**What is still yours to do**
+- Give the console a bookmark, not a link, and do not put the URL in email
+  signatures or tickets. It is not a secret, but there is no reason to publish
+  it either.
+- If Subsel staff work from fixed addresses, uncomment the `allow`/`deny`
+  block in `deploy/nginx.conf`, or use your host's access rules.
+- Turn on MFA for administrator accounts in the Supabase dashboard when you
+  are ready; the console does not implement it itself.
+- Tighten `connect-src` from `https://*.supabase.co` to your exact project URL
+  once it is settled. The four header files say where.
+- Set your own SMTP under **Project Settings → Auth** so password-reset mail
+  comes from your domain.
 
 ---
 
@@ -150,25 +319,42 @@ and phones lose signal mid-save:
 
 ```
 supabase/
-  schema.sql              run this once on a new project
+  schema.sql              tables, triggers, views, tenant security
+  admin.sql               the administration layer — run after schema.sql
+  lock_signups.sql        optional hard lock on self sign-up
   test_rls.sql            proves tenant isolation, triggers and roles
+  test_admin.sql          proves the administration rules
   _local_auth_stub.sql    lets the tests run on a plain Postgres
 web/
-  index.html              the app shell
-  css/app.css             all styling, light and dark
-  js/config.js            your Supabase URL and anon key
+  index.html              the bunk application
+  css/app.css             its styling, light and dark
+  js/config.js            your Supabase URL and anon key — shared by both pages
+  js/config.example.js    a copy to start from
   js/main.js              sign-in, bunk selection, routing
   js/db.js                Supabase client and the data repository
   js/app.js               domain logic, rendering, reports, PDFs
+  admin/index.html        the administration console
+  admin/admin.css         its own styling — graphite, not the app's navy
+  admin/admin.js          its own logic and its own session
   sw.js                   offline shell
   manifest.webmanifest    installable app metadata
+  _headers                security headers (Cloudflare Pages, Netlify)
+  robots.txt              keeps crawlers away
+deploy/
+  nginx.conf              the same headers for your own server
+scripts/
+  write-config.mjs        build config.js from environment variables
 test/
-  e2e.mjs                 browser test of the whole flow
-  fake-supabase.js        in-memory stand-in used by that test
+  e2e.mjs                 browser test of a full day at a bunk
+  admin-e2e.mjs           browser test of the console and what it refuses
+  headers.mjs             checks the security headers and the CSP
+  fake-supabase.js        in-memory stand-in used by the browser tests
 ```
 
 `js/app.js` never touches SQL — it calls the repository in `db.js`. If you
-move off Supabase later, `db.js` is the only file that changes.
+move off Supabase later, `db.js` is the only file that changes. The console
+shares no code with the application: the app's bundle contains no way to
+create an account even if someone reads it.
 
 ---
 
@@ -180,23 +366,42 @@ move off Supabase later, `db.js` is the only file that changes.
 createdb bunksoft_test
 psql -d bunksoft_test -f supabase/_local_auth_stub.sql
 psql -d bunksoft_test -f supabase/schema.sql
-psql -d bunksoft_test -f supabase/test_rls.sql
+psql -d bunksoft_test -f supabase/admin.sql
+psql -d bunksoft_test -f supabase/test_rls.sql      # tenant isolation
+psql -d bunksoft_test -f supabase/test_admin.sql    # administration rules
 ```
 
-Confirms a second tenant sees zero rows, cross-tenant writes are refused,
-stock triggers arithmetic, the balance view, and that an operator's rate
-change affects 0 rows.
+`test_rls.sql` confirms a second tenant sees zero rows, cross-tenant writes are
+refused, stock trigger arithmetic, the balance view, and that an operator's
+rate change affects 0 rows.
 
-**Frontend** — `npm i playwright && node test/e2e.mjs`. Drives sign-up,
-bunk creation, rates, a full shift, decantation, credit, payment, expenses,
-the cash book and reports against an in-memory backend.
+`test_admin.sql` runs 64 checks: that an administrator can create a business
+whose owner then signs in; that a bunk owner cannot create an account, promote
+themselves, reset anyone's password or read the audit log; that an
+administrator cannot read a customer's cash figures; that suspension blocks a
+sign-in and keeps the records; and that destructive actions need confirmation.
+
+**Frontend** — `npm i playwright`, then:
+
+```bash
+npm test          # a full day at a bunk: shift, stock, credit, cash, reports
+npm run test:admin   # the console: create, suspend, reset, refuse
+npm run test:headers # the security headers and the CSP
+```
+
+`admin-e2e.mjs` signs a bunk owner into the console and checks it refuses
+them — then calls the admin functions directly as that owner and checks the
+backend refuses each one too, which is what stops a patched page.
 
 ---
 
 ## QA checklist
 
-- [ ] Sign up, confirm email, sign in
-- [ ] Create a bunk; three tanks and five nozzles appear
+- [ ] Run all three SQL files, then bootstrap the first administrator
+- [ ] `/admin/` refuses a wrong password, and refuses a bunk owner who signs in
+- [ ] The app's sign-in page offers no way to create an account
+- [ ] Add a business; the handover card shows username and password
+- [ ] The owner signs in with them and lands in their bunk, three tanks seeded
 - [ ] Set rates; the rate board reflects them
 - [ ] Enter a shift; sold litres and amount compute live
 - [ ] Short/excess reacts to the collection figures
@@ -205,10 +410,13 @@ the cash book and reports against an in-memory backend.
 - [ ] Add a credit customer, issue a slip, receive a payment, check the ledger
 - [ ] Cash book: opening + sales + recovery − expenses − deposits = closing
 - [ ] Day report PDF carries readings, sales, credit, stock, expenses, tally
-- [ ] Add an operator; confirm Settings is read-only for them
-- [ ] Second owner with their own bunk sees none of the first bunk's data
+- [ ] Add an operator from the console; confirm Settings is read-only for them
+- [ ] A second owner with their own bunk sees none of the first bunk's data
+- [ ] Suspend an owner; they cannot sign in; reactivate; they can
+- [ ] The Activity log names you against everything you just did
+- [ ] `curl -sI https://your-domain/` shows the Content-Security-Policy
 - [ ] Works at phone width; installs to the home screen
-- [ ] Dark mode is legible throughout
+- [ ] Dark mode is legible throughout, in both the app and the console
 
 ---
 
@@ -229,6 +437,14 @@ volume**; the first paid step is Supabase Pro at about $25/month.
   Never hold money in a float.
 - PDFs use "Rs." — the PDF standard fonts have no rupee glyph. Embedding a
   Unicode font would add roughly 300 KB to the page load.
-- `jsPDF` loads from cdnjs on first report, then caches.
+- `jsPDF` loads from cdnjs on first report, then caches. If you move it, add
+  the new origin to `script-src` in all four header files or reports will stop
+  working with nothing in the interface to say why.
 - Adding a column: add it to `schema.sql`, to the mapping in `db.js`, and to
   the fake in `test/fake-supabase.js` so the tests stay honest.
+- Adding an admin function: guard it with `perform public.require_platform_admin();`
+  as its first statement, log it with `public.admin_log(...)`, and grant
+  `execute` to `authenticated` at the bottom of `admin.sql` — new functions are
+  world-executable by default until that file's revoke loop runs.
+- The console and the app share only `config.js`. Keep it that way; it is why
+  the application bundle has no account-creation code in it to find.

@@ -1,0 +1,59 @@
+# ============================================================================
+#  BunkSoft — security headers
+#  Subsel Tech Solutions Pvt Ltd
+#
+#  Read by Cloudflare Pages and by Netlify (which honours this file as well as
+#  netlify.toml). Vercel takes the same rules from vercel.json, and there is an
+#  Nginx version in deploy/nginx.conf. Keep all four in step.
+#
+#  The Content-Security-Policy is the important line. It names every place the
+#  page is allowed to load code from and talk to; anything else is refused by
+#  the browser. So a script injected into a page — through a stray innerHTML,
+#  a compromised dependency, a hostile bookmarklet — cannot fetch its payload
+#  or post your customers' data anywhere, because the browser will not connect.
+#
+#  connect-src is pinned to Supabase's domains. Tighter still is your own
+#  project: replace https://*.supabase.co with
+#  https://fvlqrqjcbiecycpurnsw.supabase.co (and the wss:// equivalent), which
+#  leaves no room for a redirected client at all. Do that once the project URL
+#  is settled.
+# ============================================================================
+
+/*
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in wss://*.supabase.in; manifest-src 'self'; worker-src 'self'; object-src 'none'; upgrade-insecure-requests
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), ambient-light-sensor=(), autoplay=(), battery=(), camera=(), display-capture=(), document-domain=(), encrypted-media=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), xr-spatial-tracking=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  X-Permitted-Cross-Domain-Policies: none
+  X-DNS-Prefetch-Control: off
+
+# The admin console: no PDF library, so cdnjs is dropped from script-src.
+# Never cached, never indexed, never sent as a referrer to anywhere else —
+# the URL itself is something worth not leaking.
+/admin/*
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in wss://*.supabase.in; object-src 'none'; upgrade-insecure-requests
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Referrer-Policy: no-referrer
+  Cache-Control: no-store, max-age=0
+
+# No cache busting in the filenames, so HTML, CSS and JS revalidate on every
+# load. A deploy therefore reaches every forecourt immediately; the service
+# worker is what keeps the app working offline, not the browser cache.
+/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+/css/*
+  Cache-Control: no-cache
+/js/*
+  Cache-Control: no-cache
+
+# Icons change only when the branding does.
+/icons/*
+  Cache-Control: public, max-age=604800

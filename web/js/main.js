@@ -1,6 +1,12 @@
 /* ============================================================================
    BunkSoft — entry point: configuration check, sign-in, bunk selection.
    Subsel Tech Solutions Pvt Ltd
+
+   There is no sign-up here, by design. Accounts and bunks are created by a
+   platform administrator in the separate console at /admin/, which this file
+   deliberately neither links to nor mentions. Nothing in this bundle can
+   create a login even if someone reads it: the functions that do live behind
+   an administrator check in the database.
    ========================================================================== */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 import * as DB from './db.js';
@@ -9,6 +15,10 @@ import { startApp, setSessionEmail } from './app.js';
 const gate = document.getElementById('gate');
 const shell = document.getElementById('shell');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* Who to ask when something needs an administrator. Change these two for a
+   reseller; they are the only branding in the sign-in screens. */
+const SUPPORT = { name: 'Subsel Tech Solutions Pvt Ltd', contact: 'your BunkSoft administrator' };
 
 /* Remember the theme across visits. */
 try {
@@ -40,10 +50,22 @@ const card = (title, sub, body, foot) => `
       ${body}
     </div>
     ${foot ? `<div class="authfoot">${foot}</div>` : ''}
-    <div class="authcredit">Subsel Tech Solutions Pvt Ltd · Powering petrol bunks. Driving growth.</div>
+    <div class="authcredit">${esc(SUPPORT.name)} · Powering petrol bunks. Driving growth.</div>
   </div>`;
 
 const err = m => `<div class="autherr">${esc(m)}</div>`;
+
+/* Supabase's messages are written for developers. Say what an operator
+   standing at the forecourt can act on instead. */
+function readableAuthError(message) {
+  const m = String(message || '');
+  if (/invalid login credentials/i.test(m)) return 'That email and password do not match. Check both, then try again.';
+  if (/email not confirmed/i.test(m)) return `This account is not active yet. Ask ${SUPPORT.contact} to activate it.`;
+  if (/banned|blocked|suspend/i.test(m)) return `This account has been suspended. Contact ${SUPPORT.contact}.`;
+  if (/rate limit|too many/i.test(m)) return 'Too many attempts. Wait a minute and try again.';
+  if (/failed to fetch|network/i.test(m)) return 'No connection to the server. Check the internet and try again.';
+  return m;
+}
 
 /* ------------------------------------------------------- not configured -- */
 function screenConfig(message) {
@@ -62,7 +84,7 @@ function screenConfig(message) {
   document.getElementById('cf_go').onclick = () => {
     const url = document.getElementById('cf_url').value.trim().replace(/\/+$/, '');
     const key = document.getElementById('cf_key').value.trim();
-    if (!/^https:\/\/.+\.supabase\.co$/.test(url)) return screenConfig('That does not look like a Supabase URL.');
+    if (!/^https:\/\/[a-z0-9-]+\.supabase\.(co|in)$/i.test(url)) return screenConfig('That does not look like a Supabase URL.');
     if (key.length < 40) return screenConfig('That anon key looks too short.');
     DB.saveOverride(url, key);
     location.reload();
@@ -70,64 +92,75 @@ function screenConfig(message) {
 }
 
 /* -------------------------------------------------------------- sign in -- */
-function screenSignIn(message, mode = 'in') {
-  const isUp = mode === 'up';
-  show(card(isUp ? 'Create your account' : 'Sign in',
-    isUp ? 'One account per person. Your owner adds you to a bunk afterwards.' : 'Welcome back.',
+function screenSignIn(message) {
+  show(card('Sign in', 'Welcome back.',
     `${message ? err(message) : ''}
-     ${isUp ? `<label class="f"><span>Your name</span><input type="text" id="au_name" autocomplete="name"></label>` : ''}
-     <label class="f"><span>Email</span><input type="email" id="au_email" autocomplete="email"></label>
+     <label class="f"><span>Email</span><input type="email" id="au_email" autocomplete="username"
+       inputmode="email" autocapitalize="none" spellcheck="false"></label>
      <label class="f"><span>Password</span><input type="password" id="au_pass"
-       autocomplete="${isUp ? 'new-password' : 'current-password'}"></label>
-     <button class="btn wide" id="au_go">${isUp ? 'Create account' : 'Sign in'}</button>
-     ${!isUp ? `<button class="linkbtn" id="au_forgot">Forgot password?</button>` : ''}`,
-    isUp ? `Already have an account? <button class="linkbtn" id="au_swap">Sign in</button>`
-         : `New here? <button class="linkbtn" id="au_swap">Create an account</button>`));
+       autocomplete="current-password"></label>
+     <button class="btn wide" id="au_go">Sign in</button>
+     <button class="linkbtn" id="au_forgot">Forgot password?</button>`,
+    `Need an account, or a password reset? Contact ${esc(SUPPORT.contact)}.`));
 
   const go = async () => {
     const email = document.getElementById('au_email').value;
     const pass = document.getElementById('au_pass').value;
-    const name = isUp ? document.getElementById('au_name').value : '';
-    if (!email || !pass) return screenSignIn('Enter your email and password.', mode);
-    if (isUp && pass.length < 8) return screenSignIn('Use at least 8 characters for the password.', mode);
+    if (!email || !pass) return screenSignIn('Enter your email and password.');
     const btn = document.getElementById('au_go');
-    btn.disabled = true; btn.textContent = isUp ? 'Creating…' : 'Signing in…';
-    const { data, error } = isUp ? await DB.auth.signUp(email, pass, name) : await DB.auth.signIn(email, pass);
-    if (error) return screenSignIn(error.message, mode);
-     if (isUp && !data.session) {
-      show(card('Check your email',
-        `We sent a confirmation link to <b>${esc(email)}</b>. Open it, then come back and sign in.`,
-        `<button class="btn wide" id="au_back">Back to sign in</button>`));
-      document.getElementById('au_back').onclick = () => screenSignIn('', 'in');
-      return;
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const { error } = await DB.auth.signIn(email, pass);
+      if (error) return screenSignIn(readableAuthError(error.message));
+    } catch (e) {
+      return screenSignIn(readableAuthError(e.message));
     }
     route();
   };
   document.getElementById('au_go').onclick = go;
+  document.getElementById('au_email').onkeydown = e => { if (e.key === 'Enter') document.getElementById('au_pass').focus(); };
   document.getElementById('au_pass').onkeydown = e => { if (e.key === 'Enter') go(); };
-  document.getElementById('au_swap').onclick = () => screenSignIn('', isUp ? 'in' : 'up');
-  const f = document.getElementById('au_forgot');
-  if (f) f.onclick = async () => {
+
+  document.getElementById('au_forgot').onclick = async () => {
     const email = document.getElementById('au_email').value;
-    if (!email) return screenSignIn('Enter your email first, then press Forgot password.', mode);
-    await DB.auth.reset(email);
-    screenSignIn('If that email has an account, a reset link is on its way.', mode);
+    if (!email) return screenSignIn('Enter your email first, then press Forgot password.');
+    try { await DB.auth.reset(email); } catch {}
+    /* Never reveal whether an account exists for that address. */
+    screenSignIn('If that email has an account, a reset link is on its way. If nothing arrives, ask your administrator to set a new password for you.');
   };
 }
 
-/* ---------------------------------------------------------- pick a bunk -- */
+/* ---------------------------------------------------- no bunk yet ------- */
+/* A real account with no bunk attached. Previously this offered to create
+   one; now only an administrator can, so say who to ask. */
+function screenNoBunk(email) {
+  show(card('No bunk assigned yet',
+    `Your account <b>${esc(email || '')}</b> works, but it is not attached to a bunk.`,
+    `<p class="authnote">Ask ${esc(SUPPORT.contact)} to attach your account to your bunk.
+     Once they do, sign in again and it will open here.</p>
+     <button class="btn wide" id="nb_retry">Check again</button>`,
+    `<button class="linkbtn" id="nb_out">Sign out</button>`));
+  document.getElementById('nb_retry').onclick = () => screenBunks('');
+  document.getElementById('nb_out').onclick = async () => { await DB.auth.signOut(); route(); };
+}
+
+/* ------------------------------------------------------ pick a bunk ---- */
 async function screenBunks(message) {
   let bunks = [];
   try { bunks = await DB.repo.myBunks(); }
   catch (e) {
-    return show(card('Cannot reach the database', e.message,
+    show(card('Cannot reach the database', readableAuthError(e.message),
       `<button class="btn wide" id="bk_retry">Try again</button>
        <button class="linkbtn" id="bk_out">Sign out</button>
-       <p class="authnote">If this persists, check that <b>schema.sql</b> has been run on this Supabase project.</p>`,
-      ''), wire());
+       <p class="authnote">If this keeps happening, contact ${esc(SUPPORT.contact)}.</p>`,
+      ''));
+    return wire();
   }
 
-  if (!bunks.length) return screenNewBunk('', true);
+  if (!bunks.length) return screenNoBunk(DB.sessionEmail);
+
+  /* One bunk and nothing to choose: open it. */
+  if (bunks.length === 1) return open({ id: bunks[0].id, role: bunks[0].role });
 
   show(card('Choose a bunk', 'You have access to these.',
     `${message ? err(message) : ''}
@@ -137,14 +170,12 @@ async function screenBunks(message) {
           <span class="bm">${esc([b.brand, b.place].filter(Boolean).join(' · ') || 'No location set')}</span>
           <span class="pill ${b.role === 'operator' ? 'wr' : 'ok'}">${esc(b.role)}</span>
         </button>`).join('')}
-     </div>
-     <button class="btn ghost wide" id="bk_new">Add another bunk</button>`,
+     </div>`,
     `<button class="linkbtn" id="bk_out">Sign out</button>`));
 
   gate.querySelectorAll('.bunkrow').forEach(el => {
     el.onclick = () => open({ id: el.dataset.id, role: el.dataset.role });
   });
-  document.getElementById('bk_new').onclick = () => screenNewBunk('', false);
   wire();
 
   function wire() {
@@ -153,37 +184,6 @@ async function screenBunks(message) {
     const r = document.getElementById('bk_retry');
     if (r) r.onclick = () => screenBunks('');
   }
-}
-
-function screenNewBunk(message, first) {
-  show(card(first ? 'Set up your bunk' : 'Add a bunk',
-    first ? 'Two minutes now, and every shift afterwards is just meter readings and cash.' : '',
-    `${message ? err(message) : ''}
-     <label class="f"><span>Bunk name</span><input type="text" id="nb_name" placeholder="Sri Balaji Fuels"></label>
-     <label class="f"><span>Oil company</span><input type="text" id="nb_brand" placeholder="Indian Oil / BPCL / HPCL"></label>
-     <label class="f"><span>Location</span><input type="text" id="nb_place" placeholder="Town, State"></label>
-     <button class="btn wide" id="nb_go">Create bunk</button>
-     <p class="authnote">You get three tanks and five nozzles to start with — rename, add or remove them
-     under Settings, and set your rates before the first shift.</p>`,
-    first ? `<button class="linkbtn" id="nb_out">Sign out</button>`
-          : `<button class="linkbtn" id="nb_back">Back</button>`));
-
-  document.getElementById('nb_go').onclick = async () => {
-    const name = document.getElementById('nb_name').value.trim();
-    if (!name) return screenNewBunk('Give the bunk a name.', first);
-    const btn = document.getElementById('nb_go');
-    btn.disabled = true; btn.textContent = 'Creating…';
-    try {
-      const id = await DB.repo.createBunk(name,
-        document.getElementById('nb_brand').value.trim(),
-        document.getElementById('nb_place').value.trim());
-      open({ id, role: 'owner' });
-    } catch (e) { screenNewBunk(e.message, first); }
-  };
-  const back = document.getElementById('nb_back');
-  if (back) back.onclick = () => screenBunks('');
-  const out = document.getElementById('nb_out');
-  if (out) out.onclick = async () => { await DB.auth.signOut(); route(); };
 }
 
 /* ------------------------------------------------------------- routing -- */
@@ -195,11 +195,15 @@ function open(bunk) {
 
 async function route() {
   if (!DB.configured) return screenConfig('');
-  const session = await DB.auth.session();
-  if (!session) return screenSignIn('', 'in');
+  let session = null;
+  try { session = await DB.auth.session(); } catch {}
+  if (!session) return screenSignIn('');
+  DB.setSessionEmail(session.user.email || '');
   setSessionEmail(session.user.email || '');
 
-  /* Go straight back to the bunk this device used last. */
+  /* Go straight back to the bunk this device used last. The role is re-read
+     from the server every time — a stale role in localStorage must never be
+     what decides whether Settings is editable. */
   let last = null;
   try { last = JSON.parse(localStorage.getItem('bunksoft.bunk') || 'null'); } catch {}
   if (last && last.id) {
@@ -207,6 +211,8 @@ async function route() {
       const mine = await DB.repo.myBunks();
       const found = (mine || []).find(b => b.id === last.id);
       if (found) return open({ id: found.id, role: found.role });
+      /* Access was removed while this device was away. */
+      try { localStorage.removeItem('bunksoft.bunk'); } catch {}
     } catch {}
   }
   screenBunks('');
@@ -231,5 +237,5 @@ route();
 
 /* Offline shell, so the forecourt keeps working on a weak signal. */
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  navigator.serviceWorker.register('./sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {});
 }
