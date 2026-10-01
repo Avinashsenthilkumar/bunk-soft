@@ -193,6 +193,8 @@ ok('the owner is named against it', (await page.textContent('#btbody')).includes
 ok('it is flagged as not started yet', /not started/i.test(await page.textContent('#btbody')));
 
 console.log('\n4. Weak input is refused by the console');
+ok('the accounts tab is labelled Users',
+  /Users/.test(await page.textContent('#atabs')) && !/Accounts/.test(await page.textContent('#atabs')));
 await page.click('[data-tab="accounts"]'); await wait(400);
 await page.fill('#nl_email', 'weak@example.com');
 await page.fill('#nl_pass', 'short1');
@@ -257,33 +259,45 @@ Object.entries(refusals.out).forEach(([fn, v]) =>
 Object.entries(refusals.reads).forEach(([fn, v]) =>
   ok(`${fn}() returns nothing to a bunk owner`, v));
 
-console.log('\n7. Suspending a business blocks the sign-in but keeps the records');
+console.log('\n7. Disabling a business shuts the bunk but keeps every record');
 await adminSignIn('admin@subsel.in', 'Subsel2026Admin');
 await page.click('[data-tab="business"]'); await wait(500);
-await page.click('#btbody [data-act="suspend"]'); await wait(400);
-ok('suspending asks for confirmation', !!(await page.$('#cf_txt')));
-await page.fill('#cf_txt', 'balaji@example.com');
-await page.click('#cf_do'); await wait(900);
-ok('the business shows as suspended', /suspended/i.test(await page.textContent('#btbody')));
+ok('the Businesses tab has no Remove button', !(await page.$('#btbody [data-act="delbunk"]')));
+ok('it carries a Disable button instead', !!(await page.$('#btbody [data-act="togglebunk"]')));
+ok('the second "Add a business" form is gone',
+  (await page.textContent('#aview')).split('Add a business').length - 1 === 0);
+
+await page.click('#btbody [data-act="togglebunk"]'); await wait(1000);
+ok('disabling takes effect on one click, with no dialog', !(await page.$('#cf_txt')));
+ok('the business shows as disabled', /disabled/i.test(await page.textContent('#btbody')));
+ok('the button now offers Enable',
+  /Enable/.test(await page.textContent('#btbody [data-act="togglebunk"]')));
 ok('the bunk itself survived', (await page.textContent('#btbody')).includes('Sri Balaji Fuels'));
 
 await appSignIn('balaji@example.com', genPass);
-ok('the suspended owner cannot sign in', !(await shown('[data-tab="dash"]')));
-ok('and is told the account is suspended',
-  /suspended/i.test(await page.textContent('#gate')));
+ok('the owner of a disabled bunk cannot open it', !(await shown('[data-tab="dash"]')));
+ok('and is told the bunk is switched off',
+  /switched off/i.test(await page.textContent('#gate')));
+ok('and is told nothing was deleted',
+  /nothing has been deleted/i.test(await page.textContent('#gate')));
 
-console.log('\n8. Reactivating, and the audit trail');
+console.log('\n8. Enabling it again, and the audit trail');
 await adminSignIn('admin@subsel.in', 'Subsel2026Admin');
 await page.click('[data-tab="business"]'); await wait(500);
-await page.click('#btbody [data-act="suspend"]'); await wait(800);
-ok('reactivating needs no confirmation', !(await page.$('#cf_txt')));
-ok('the business is active again', !/suspended/i.test(await page.textContent('#btbody')));
+await page.click('#btbody [data-act="togglebunk"]'); await wait(1000);
+ok('the business is live again', !/disabled/i.test(await page.textContent('#btbody')));
 
+await appSignIn('balaji@example.com', genPass);
+ok('the owner is back in, with their records intact', await shown('[data-tab="dash"]'));
+ok('their bunk name is still on the header',
+  (await page.textContent('#hdName')).includes('Sri Balaji'));
+
+await adminSignIn('admin@subsel.in', 'Subsel2026Admin');
 await page.click('[data-tab="activity"]'); await wait(500);
 const audit = await page.textContent('body');
 ok('the audit log records the business being created', /Created business/i.test(audit));
-ok('the audit log records the suspension', /Suspended/i.test(audit));
-ok('the audit log records the reactivation', /Reactivated/i.test(audit));
+ok('the audit log records the disabling', /Disabled business/i.test(audit));
+ok('the audit log records the enabling', /Enabled business/i.test(audit));
 ok('the audit log names the administrator', audit.includes('admin@subsel.in'));
 ok('the log is described as unalterable', /cannot be edited or deleted/i.test(audit));
 

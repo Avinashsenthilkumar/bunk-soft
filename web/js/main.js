@@ -130,6 +130,24 @@ function screenSignIn(message) {
   };
 }
 
+/* --------------------------------------------------- bunk disabled ------ */
+/* The administrator has switched this bunk off. Row-level security already
+   hides every row, so without this the app would open onto blank tables and
+   look broken. Say what has actually happened. */
+function screenDisabled(bunks) {
+  const one = bunks.length === 1;
+  show(card(one ? 'This bunk is switched off' : 'Those bunks are switched off',
+    one ? `<b>${esc(bunks[0].name)}</b> has been disabled by ${esc(SUPPORT.contact)}.`
+        : 'Every bunk on your account has been disabled.',
+    `<p class="authnote">Nothing has been deleted. Every shift, reading and credit slip is exactly where
+     you left it, and it all comes back the moment the bunk is switched on again.</p>
+     <p class="authnote">Contact ${esc(SUPPORT.contact)} to sort it out.</p>
+     <button class="btn wide" id="db_retry">Check again</button>`,
+    `<button class="linkbtn" id="db_out">Sign out</button>`));
+  document.getElementById('db_retry').onclick = () => screenBunks('');
+  document.getElementById('db_out').onclick = async () => { await DB.auth.signOut(); route(); };
+}
+
 /* ---------------------------------------------------- no bunk yet ------- */
 /* A real account with no bunk attached. Previously this offered to create
    one; now only an administrator can, so say who to ask. */
@@ -159,18 +177,25 @@ async function screenBunks(message) {
 
   if (!bunks.length) return screenNoBunk(DB.sessionEmail);
 
-  /* One bunk and nothing to choose: open it. */
-  if (bunks.length === 1) return open({ id: bunks[0].id, role: bunks[0].role });
+  /* A disabled bunk cannot be opened — the database would hand back nothing. */
+  const live = bunks.filter(b => !b.disabled);
+  if (!live.length) return screenDisabled(bunks);
 
+  /* One bunk and nothing to choose: open it. */
+  if (live.length === 1) return open({ id: live[0].id, role: live[0].role });
+
+  const off = bunks.filter(b => b.disabled);
   show(card('Choose a bunk', 'You have access to these.',
     `${message ? err(message) : ''}
      <div class="bunklist">
-       ${bunks.map(b => `<button class="bunkrow" data-id="${esc(b.id)}" data-role="${esc(b.role)}">
+       ${live.map(b => `<button class="bunkrow" data-id="${esc(b.id)}" data-role="${esc(b.role)}">
           <span class="bn">${esc(b.name)}</span>
           <span class="bm">${esc([b.brand, b.place].filter(Boolean).join(' · ') || 'No location set')}</span>
           <span class="pill ${b.role === 'operator' ? 'wr' : 'ok'}">${esc(b.role)}</span>
         </button>`).join('')}
-     </div>`,
+     </div>
+     ${off.length ? `<p class="authnote">${esc(off.map(b => b.name).join(', '))}
+       ${off.length === 1 ? 'is' : 'are'} switched off at the moment — contact ${esc(SUPPORT.contact)}.</p>` : ''}`,
     `<button class="linkbtn" id="bk_out">Sign out</button>`));
 
   gate.querySelectorAll('.bunkrow').forEach(el => {
@@ -210,7 +235,8 @@ async function route() {
     try {
       const mine = await DB.repo.myBunks();
       const found = (mine || []).find(b => b.id === last.id);
-      if (found) return open({ id: found.id, role: found.role });
+      if (found && !found.disabled) return open({ id: found.id, role: found.role });
+      if (found && found.disabled) return screenDisabled([found]);
       /* Access was removed while this device was away. */
       try { localStorage.removeItem('bunksoft.bunk'); } catch {}
     } catch {}

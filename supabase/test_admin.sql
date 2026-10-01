@@ -562,4 +562,85 @@ begin
     'removing a bunk still cascades its memberships away');
 end $$;
 
+-- ---------------------------------------------------------------------------
+--  10. Disabling a business
+--  Shutting a bunk must lock out every member, not just the owner, and must
+--  not destroy a single row.
+-- ---------------------------------------------------------------------------
+do $$
+declare v_admin uuid; v_bunk uuid; v_owner uuid; v_op uuid; n int;
+begin
+  select user_id into v_admin from public.platform_admins
+   where user_id = (select id from auth.users where email='admin@subsel.in');
+  perform pg_temp.act_as(v_admin);
+  select id into v_bunk  from public.bunks where name = 'Sri Balaji Fuels';
+  select id into v_owner from auth.users where email = 'balaji@example.com';
+  select id into v_op    from auth.users where email = 'operator1@example.com';
+
+  -- live: the owner can read their own trade
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  select count(*) into n from public.expenses;
+  reset role;
+  perform pg_temp.ok(n > 0, 'before disabling, the owner can read their own rows');
+
+  perform pg_temp.act_as(v_admin);
+  perform public.admin_set_bunk_disabled(v_bunk, true);
+  perform pg_temp.ok(
+    (select disabled from public.admin_businesses() where bunk_id = v_bunk),
+    'the console reports the business as disabled');
+
+  -- disabled: nobody on the bunk sees anything
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  select count(*) into n from public.expenses;
+  reset role;
+  perform pg_temp.ok(n = 0, 'the OWNER of a disabled bunk reads no rows');
+
+  perform pg_temp.act_as(v_op);
+  set local role authenticated;
+  select count(*) into n from public.shifts;
+  reset role;
+  perform pg_temp.ok(n = 0, 'an OPERATOR on a disabled bunk reads no rows either');
+
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  begin
+    insert into public.expenses (bunk_id, day, head, amount)
+    values (v_bunk, current_date, 'While disabled', 100);
+    reset role;
+    raise exception 'FAIL  a write went through on a disabled bunk';
+  exception when insufficient_privilege or check_violation then
+    reset role;
+    raise notice 'PASS  writes to a disabled bunk are refused';
+  end;
+
+  -- the app can still find out why
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  perform pg_temp.ok((select disabled from public.my_bunks() where id = v_bunk),
+    'my_bunks() still tells the app the bunk is disabled, so it can explain');
+  reset role;
+
+  -- nothing was destroyed
+  perform pg_temp.ok((select count(*) from public.expenses where bunk_id = v_bunk) > 0,
+    'every row is still in the database while the bunk is off');
+
+  -- and it all comes back
+  perform pg_temp.act_as(v_admin);
+  perform public.admin_set_bunk_disabled(v_bunk, false);
+  perform pg_temp.act_as(v_owner);
+  set local role authenticated;
+  select count(*) into n from public.expenses;
+  reset role;
+  perform pg_temp.ok(n > 0, 'enabling the bunk gives every row straight back');
+
+  -- and it is in the audit trail
+  perform pg_temp.act_as(v_admin);
+  perform pg_temp.ok(
+    exists (select 1 from public.admin_audit_log(500) where action = 'disable_bunk')
+    and exists (select 1 from public.admin_audit_log(500) where action = 'enable_bunk'),
+    'disabling and enabling are both in the audit log');
+end $$;
+
 do $$ begin raise notice ' '; raise notice 'All administration checks passed.'; end $$;

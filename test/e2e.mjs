@@ -16,7 +16,12 @@ const server = http.createServer((req,res)=>{
 });
 await new Promise(r=>server.listen(4173,r));
 
-const b = await chromium.launch({executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome'});
+/* Use a Chromium sitting at a known path if there is one, otherwise let
+   Playwright launch the copy it downloaded itself (npx playwright install
+   chromium). Hard-coding a path here made this file Linux-only. */
+const exe = ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome', '/opt/pw-browsers/chromium/chrome']
+  .find(p => { try { return fs.existsSync(p); } catch { return false; } });
+const b = await chromium.launch(exe ? {executablePath:exe} : {});
 const p = await b.newPage({viewport:{width:1440,height:1000}});
 const errs=[]; p.on('pageerror',e=>errs.push(e.message));
 p.on('console',m=>{if(m.type()==='error'&&!/favicon|manifest|sw\.js|fonts\.googleapis|TUNNEL/i.test(m.text()))errs.push('console: '+m.text());});

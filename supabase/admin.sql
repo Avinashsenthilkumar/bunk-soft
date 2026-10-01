@@ -861,3 +861,151 @@ end $$;
 revoke all on all tables    in schema public from anon;
 revoke all on all sequences in schema public from anon;
 revoke usage on schema public from anon;
+
+-- ============================================================================
+--  14. Disabling a business
+--
+--  Suspending an OWNER blocks one login. Disabling a BUSINESS shuts the whole
+--  bunk: nobody on it — owner, manager or operator — can read or write a
+--  single row while it is off. Nothing is deleted, and one click puts it back.
+--
+--  That is what a software vendor actually needs when an invoice goes unpaid,
+--  and it is why the console has no "remove the bunk" button. Deleting a bunk
+--  destroys its whole trading history; admin_delete_bunk() still exists for
+--  the rare case, but it lives in SQL where it cannot be hit by accident.
+-- ============================================================================
+alter table public.bunks add column if not exists disabled_at timestamptz;
+comment on column public.bunks.disabled_at is
+  'Null while the bunk is live. Set, and every member loses access to its data until it is cleared.';
+
+-- The access check every data table already goes through. Adding the bunk's
+-- own state here means one change disables sales, stock, credit, expenses,
+-- cash and settings at once — there is no table to forget.
+create or replace function public.is_bunk_member(b uuid)
+returns boolean language sql stable security definer set search_path = public, pg_temp as $$
+  select exists (
+    select 1 from public.memberships m
+    join public.bunks bk on bk.id = m.bunk_id
+    where m.bunk_id = b and m.user_id = auth.uid() and bk.disabled_at is null
+  );
+$$;
+
+create or replace function public.has_bunk_role(b uuid, roles public.member_role[])
+returns boolean language sql stable security definer set search_path = public, pg_temp as $$
+  select exists (
+    select 1 from public.memberships m
+    join public.bunks bk on bk.id = m.bunk_id
+    where m.bunk_id = b and m.user_id = auth.uid() and m.role = any(roles)
+      and bk.disabled_at is null
+  );
+$$;
+
+-- The bunk row and the team list stay readable even when disabled, so the app
+-- can say plainly what has happened instead of showing an empty screen.
+create or replace function public.is_bunk_member_any(b uuid)
+returns boolean language sql stable security definer set search_path = public, pg_temp as $$
+  select exists (select 1 from public.memberships m
+                  where m.bunk_id = b and m.user_id = auth.uid());
+$$;
+
+drop policy if exists bunks_read on public.bunks;
+create policy bunks_read on public.bunks
+  for select using (public.is_bunk_member_any(id));
+
+drop policy if exists memberships_read on public.memberships;
+create policy memberships_read on public.memberships
+  for select using (public.is_bunk_member_any(bunk_id));
+
+-- my_bunks() gains a flag, so the sign-in screen can explain rather than
+-- silently show nothing. Dropped first: the return type changes.
+drop function if exists public.my_bunks();
+create or replace function public.my_bunks()
+returns table (id uuid, name text, brand text, place text,
+               role public.member_role, disabled boolean)
+language sql stable security definer set search_path = public, pg_temp as $$
+  select b.id, b.name, b.brand, b.place, m.role, (b.disabled_at is not null)
+  from public.bunks b
+  join public.memberships m on m.bunk_id = b.id
+  where m.user_id = auth.uid()
+  order by b.created_at;
+$$;
+
+create or replace function public.admin_set_bunk_disabled(p_bunk uuid, p_disabled boolean)
+returns boolean language plpgsql security definer set search_path = public, pg_temp as $$
+declare v_name text;
+begin
+  perform public.require_platform_admin();
+  select name into v_name from public.bunks where id = p_bunk;
+  if v_name is null then raise exception 'No such bunk.'; end if;
+
+  update public.bunks
+     set disabled_at = case when p_disabled then now() else null end
+   where id = p_bunk;
+
+  perform public.admin_log(case when p_disabled then 'disable_bunk' else 'enable_bunk' end,
+                           v_name, jsonb_build_object('bunk_id', p_bunk));
+  return true;
+end $$;
+
+-- admin_businesses() reports the state. Dropped first: the return type changes.
+drop function if exists public.admin_businesses();
+create or replace function public.admin_businesses()
+returns table (
+  bunk_id uuid, name text, brand text, place text, created_at timestamptz,
+  owner_name text, owner_email text, owner_id uuid, owner_suspended boolean,
+  disabled boolean, staff_count int, days_recorded int, shifts_recorded int,
+  last_activity timestamptz
+) language sql stable security definer set search_path = public, auth, pg_temp as $$
+  select
+    b.id, b.name, b.brand, b.place, b.created_at,
+    p.full_name, u.email, u.id,
+    coalesce(u.banned_until > now(), false),
+    (b.disabled_at is not null),
+    (select count(*)::int from public.memberships m where m.bunk_id = b.id),
+    (select count(*)::int from public.business_days d where d.bunk_id = b.id),
+    (select count(*)::int from public.shifts s where s.bunk_id = b.id),
+    greatest(
+      (select max(d.updated_at) from public.business_days d where d.bunk_id = b.id),
+      (select max(s.updated_at) from public.shifts s where s.bunk_id = b.id),
+      b.created_at
+    )
+  from public.bunks b
+  left join public.memberships om
+         on om.bunk_id = b.id and om.role = 'owner'
+        and om.created_at = (select min(m2.created_at) from public.memberships m2
+                              where m2.bunk_id = b.id and m2.role = 'owner')
+  left join auth.users u on u.id = om.user_id
+  left join public.profiles p on p.id = om.user_id
+  where public.is_platform_admin()
+  order by b.created_at desc;
+$$;
+
+create or replace function public.admin_stats()
+returns jsonb language sql stable security definer set search_path = public, auth, pg_temp as $$
+  select case when not public.is_platform_admin() then null else jsonb_build_object(
+    'businesses',        (select count(*) from public.bunks),
+    'disabled_bunks',    (select count(*) from public.bunks where disabled_at is not null),
+    'accounts',          (select count(*) from auth.users),
+    'suspended',         (select count(*) from auth.users where banned_until > now()),
+    'admins',            (select count(*) from public.platform_admins),
+    'active_this_week',  (select count(distinct bunk_id) from public.shifts
+                           where updated_at > now() - interval '7 days'),
+    'shifts_this_week',  (select count(*) from public.shifts
+                           where updated_at > now() - interval '7 days'),
+    'signed_up_today',   (select count(*) from auth.users where created_at::date = current_date)
+  ) end;
+$$;
+
+grant execute on function public.my_bunks()                              to authenticated;
+grant execute on function public.is_bunk_member_any(uuid)                to authenticated;
+grant execute on function public.admin_businesses()                      to authenticated;
+grant execute on function public.admin_stats()                           to authenticated;
+grant execute on function public.admin_set_bunk_disabled(uuid, boolean)  to authenticated;
+
+do $$
+declare r record;
+begin
+  for r in select p.oid::regprocedure as sig from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
+  loop execute format('revoke all on function %s from public, anon', r.sig); end loop;
+end $$;

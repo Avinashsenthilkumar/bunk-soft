@@ -172,9 +172,18 @@ exists, because only you can create one.
 
 **When someone stops paying**
 
-*Suspend*, not *Remove*. Suspending blocks the sign-in and leaves every record
-untouched; reactivating takes one click. **Remove** destroys the bunk and its
-entire history, which is why it makes you type the name back first.
+*Businesses → Disable*. One click shuts the whole bunk: the owner, every
+manager and every operator lose access to it, enforced in the database rather
+than hidden in the interface. Nothing is deleted and no figure changes — the
+app tells them the bunk is switched off and that their records are safe.
+*Enable* puts it all back, also in one click.
+
+There is deliberately no button that removes a bunk. Deleting one destroys its
+entire trading history with no undo; `admin_delete_bunk()` still exists in
+`admin.sql` for the rare case, where it cannot be hit by accident.
+
+To block one person rather than a whole business — a member of staff who has
+left, say — use *Suspend* on the **Users** tab instead.
 
 **Activity**
 
@@ -221,7 +230,8 @@ another administrator's password, and the last one cannot be removed.
 | Grant access to their own bunk | no | yes | yes | yes |
 | Create a BunkSoft login | **no** | **no** | **no** | yes |
 | Create or remove a bunk | no | no | no | yes |
-| Suspend an account | no | no | no | yes |
+| Suspend one account | no | no | no | yes |
+| Disable a whole business | no | no | no | yes |
 
 Enforced in the database, not just hidden in the interface — an operator
 calling the API directly still cannot change a rate, and a bunk owner calling
@@ -396,7 +406,7 @@ psql -d bunksoft_test -f supabase/test_admin.sql    # administration rules
 refused, stock trigger arithmetic, the balance view, and that an operator's
 rate change affects 0 rows.
 
-`test_admin.sql` runs 74 checks: that an administrator can create a business
+`test_admin.sql` runs 83 checks: that an administrator can create a business
 whose owner then signs in; that a bunk owner cannot create an account, promote
 themselves, reset anyone's password or read the audit log; that an
 administrator cannot read a customer's cash figures; that suspension blocks a
@@ -433,7 +443,9 @@ backend refuses each one too, which is what stops a patched page.
 - [ ] Day report PDF carries readings, sales, credit, stock, expenses, tally
 - [ ] Add an operator from the console; confirm Settings is read-only for them
 - [ ] A second owner with their own bunk sees none of the first bunk's data
-- [ ] Suspend an owner; they cannot sign in; reactivate; they can
+- [ ] Suspend an owner on the Users tab; they cannot sign in; reactivate; they can
+- [ ] Disable a business; every member of it is locked out and told why;
+      enable it and every record is back
 - [ ] The Activity log names you against everything you just did
 - [ ] `curl -sI https://your-domain/` shows the Content-Security-Policy
 - [ ] Works at phone width; installs to the home screen

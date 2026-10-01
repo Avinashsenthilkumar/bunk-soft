@@ -270,7 +270,7 @@ async function load() {
 const TABS = [
   ['overview',  'Overview'],
   ['business',  'Businesses'],
-  ['accounts',  'Accounts'],
+  ['accounts',  'Users'],
   ['admins',    'Administrators'],
   ['activity',  'Activity']
 ];
@@ -310,9 +310,10 @@ function vOverview() {
   const recent = data.businesses.slice(0, 6);
   return `
   <div class="stats">
-    ${stat('Businesses', s.businesses ?? 0, 'bunks on the platform')}
+    ${stat('Businesses', s.businesses ?? 0,
+        s.disabled_bunks ? s.disabled_bunks + ' disabled' : 'bunks on the platform')}
     ${stat('Active this week', s.active_this_week ?? 0, 'entered a shift in 7 days')}
-    ${stat('Accounts', s.accounts ?? 0, 'logins in total')}
+    ${stat('Users', s.accounts ?? 0, 'logins in total')}
     ${stat('Suspended', s.suspended ?? 0, 'blocked from signing in')}
     ${stat('Shifts this week', s.shifts_this_week ?? 0, 'across every bunk')}
     ${stat('Administrators', s.admins ?? 0, 'Subsel staff with access')}
@@ -390,9 +391,11 @@ function handover(title, rows, note) {
 
 /* -------------------------------------------------------- businesses --- */
 function vBusinesses() {
+  const off = data.businesses.filter(b => b.disabled).length;
   return `
   <div class="p">
-    <div class="ph"><h2>Businesses</h2><span class="hint">${data.businesses.length} on the platform</span>
+    <div class="ph"><h2>Businesses</h2>
+      <span class="hint">${data.businesses.length} on the platform${off ? ` · ${off} disabled` : ''}</span>
       <span class="grow"></span>
       <input type="search" id="bq" placeholder="Search name, owner, town…" style="padding:7px 11px;border:1px solid var(--line-2);border-radius:8px;background:var(--panel)">
     </div>
@@ -403,10 +406,13 @@ function vBusinesses() {
     </table></div></div>
   </div>
 
-  <div class="p">
-    <div class="ph"><h2>Add a business</h2></div>
-    <div class="pb">${formNewBusiness()}</div>
-  </div>`;
+  <div class="note">
+    Disabling a business shuts the whole bunk — owner, manager and operator all lose access until you
+    enable it again. Nothing is deleted and no figure changes; they simply cannot sign in to it. That is
+    what to use when an invoice goes unpaid.
+  </div>
+
+  <div id="nb_out"></div>`;
 }
 
 function rowsBusinesses(list) {
@@ -418,17 +424,18 @@ function rowsBusinesses(list) {
     <td class="r num">${b.staff_count ?? 0}</td>
     <td class="r num">${b.days_recorded ?? 0}</td>
     <td class="sub">${ago(b.last_activity)}</td>
-    <td>${b.owner_suspended
-          ? '<span class="pill bad">suspended</span>'
+    <td>${b.disabled
+          ? '<span class="pill bad">disabled</span>'
+          : b.owner_suspended
+          ? '<span class="pill wr">owner suspended</span>'
           : (b.days_recorded > 0 ? '<span class="pill ok">active</span>' : '<span class="pill wr">not started</span>')}</td>
     <td class="r"><div class="acts">
       <button class="btn ghost sm" data-act="team" data-id="${esc(b.bunk_id)}">Team (${b.staff_count ?? 0})</button>
       ${b.owner_id ? `<button class="btn ghost sm" data-act="resetpw" data-id="${esc(b.owner_id)}"
-          data-email="${esc(b.owner_email || '')}">Reset password</button>
-        <button class="btn ghost sm" data-act="suspend" data-id="${esc(b.owner_id)}"
-          data-email="${esc(b.owner_email || '')}" data-on="${b.owner_suspended ? '0' : '1'}">
-          ${b.owner_suspended ? 'Reactivate' : 'Suspend'}</button>` : ''}
-      <button class="btn danger sm" data-act="delbunk" data-id="${esc(b.bunk_id)}" data-name="${esc(b.name)}">Remove</button>
+          data-email="${esc(b.owner_email || '')}">Reset password</button>` : ''}
+      <button class="btn ${b.disabled ? '' : 'danger'} sm" data-act="togglebunk"
+        data-id="${esc(b.bunk_id)}" data-name="${esc(b.name)}" data-on="${b.disabled ? '0' : '1'}">
+        ${b.disabled ? 'Enable' : 'Disable'}</button>
     </div></td></tr>`).join('');
 }
 
@@ -560,6 +567,7 @@ const ACTION_LABEL = {
   set_password: 'Reset password', suspend: 'Suspended', reactivate: 'Reactivated',
   delete_account: 'Deleted account', delete_bunk: 'Removed bunk', set_member: 'Changed bunk access',
   remove_member: 'Removed bunk access', grant_admin: 'Granted admin', revoke_admin: 'Revoked admin',
+  disable_bunk: 'Disabled business', enable_bunk: 'Enabled business',
   bootstrap_admin: 'First administrator created'
 };
 function vActivity() {
@@ -839,6 +847,14 @@ function handle(action, el) {
       }, 'Your password has been changed.');
     },
 
+    /* ---- disable or enable a whole business ---- */
+    togglebunk: () => {
+      const off = el.dataset.on === '1', id = el.dataset.id, name = el.dataset.name;
+      return act(() => rpc('admin_set_bunk_disabled', { p_bunk: id, p_disabled: off }),
+        off ? name + ' disabled — nobody on that bunk can sign in to it now.'
+            : name + ' enabled — the bunk is live again.');
+    },
+
     /* ---- suspend, delete ---- */
     suspend: () => {
       const on = el.dataset.on === '1', email = el.dataset.email, id = el.dataset.id;
@@ -858,16 +874,6 @@ function handle(action, el) {
         'Delete the account', email,
         typed => act(() => rpc('admin_delete_account', { p_user: id, p_confirm_email: typed }), 'Account deleted.'));
     },
-    delbunk: () => {
-      const name = el.dataset.name, id = el.dataset.id;
-      modalConfirm('Remove ' + name,
-        `<div class="note bad">Every shift, reading, credit slip, expense and report belonging to this bunk
-          is destroyed. There is no undo and no backup on this side. If the customer has simply stopped
-          paying, suspend the owner's login instead.</div>`,
-        'Remove the bunk and all its records', name,
-        typed => act(() => rpc('admin_delete_bunk', { p_bunk: id, p_confirm_name: typed }), name + ' removed.'));
-    },
-
     /* ---- membership ---- */
     team: () => modalTeam(el.dataset.id),
     addstaff: () => modalAddStaff(el.dataset.id),

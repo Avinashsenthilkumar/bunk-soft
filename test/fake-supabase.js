@@ -68,15 +68,23 @@ export function createFakeClient(T, state) {
   }
 
   /* row-level security, simplified to the rule that matters: membership */
-  const myBunkIds = () => T.memberships.filter(m => m.user_id === me()).map(m => m.bunk_id);
+  /* Mirrors is_bunk_member in admin.sql: membership AND an enabled bunk.
+     A disabled bunk hides every row from everyone on it. */
+  const bunkLive = id => { const b = T.bunks.find(x => x.id === id); return !!b && !b.disabled_at; };
+  const myBunkIdsAny = () => T.memberships.filter(m => m.user_id === me()).map(m => m.bunk_id);
+  const myBunkIds = () => myBunkIdsAny().filter(bunkLive);
   /* Mirrors profiles_read in admin.sql: yourself, and anyone on a bunk you
      belong to. Before that policy existed this was `r.id === me()`, which is
      why the team list could never show a colleague's name. */
   const sharesBunk = id => T.memberships.some(m =>
     m.user_id === id && myBunkIds().includes(m.bunk_id));
-  const visible = (table, r) =>
-    table === 'profiles' ? (r.id === me() || sharesBunk(r.id))
-                         : !r.bunk_id || myBunkIds().includes(r.bunk_id);
+  const visible = (table, r) => {
+    if (table === 'profiles') return r.id === me() || sharesBunk(r.id);
+    /* bunks and memberships stay readable when disabled — see is_bunk_member_any */
+    if (table === 'bunks') return myBunkIdsAny().includes(r.id);
+    if (table === 'memberships') return myBunkIdsAny().includes(r.bunk_id);
+    return !r.bunk_id || myBunkIds().includes(r.bunk_id);
+  };
   const myRoleOn = b => (T.memberships.find(x => x.bunk_id === b && x.user_id === me()) || {}).role;
   const canWrite = (table, r) => {
     if (!myBunkIds().includes(r.bunk_id)) return false;
@@ -199,7 +207,8 @@ export function createFakeClient(T, state) {
     my_bunks: () => T.memberships.filter(m => m.user_id === me())
       .map(m => {
         const b = T.bunks.find(x => x.id === m.bunk_id);
-        return b ? { id: b.id, name: b.name, brand: b.brand, place: b.place, role: m.role } : null;
+        return b ? { id: b.id, name: b.name, brand: b.brand, place: b.place,
+                     role: m.role, disabled: !!b.disabled_at } : null;
       }).filter(Boolean),
     /* Since admin.sql, create_bunk() is not granted to a signed-in user.
        Fail the way Postgres does, so nothing in the app can quietly depend
@@ -234,6 +243,7 @@ export function createFakeClient(T, state) {
           bunk_id: b.id, name: b.name, brand: b.brand, place: b.place, created_at: b.created_at,
           owner_name: u ? u.name : null, owner_email: u ? u.email : null, owner_id: u ? u.id : null,
           owner_suspended: !!(u && u.suspended),
+          disabled: !!b.disabled_at,
           staff_count: T.memberships.filter(m => m.bunk_id === b.id).length,
           days_recorded: T.business_days.filter(d => d.bunk_id === b.id).length,
           shifts_recorded: T.shifts.filter(s => s.bunk_id === b.id).length,
@@ -259,6 +269,7 @@ export function createFakeClient(T, state) {
       businesses: T.bunks.length, accounts: state.users.length,
       suspended: state.users.filter(u => u.suspended).length,
       admins: state.admins.length,
+      disabled_bunks: T.bunks.filter(b => b.disabled_at).length,
       active_this_week: new Set(T.shifts.map(s => s.bunk_id)).size,
       shifts_this_week: T.shifts.length, signed_up_today: 0
     } : null,
@@ -286,6 +297,15 @@ export function createFakeClient(T, state) {
       setMember(p_bunk, uid, p_role);
       log('create_staff', norm(p_email), { bunk: b.name, role: p_role });
       return { user_id: uid, email: norm(p_email), bunk: b.name, role: p_role };
+    },
+
+    admin_set_bunk_disabled: ({ p_bunk, p_disabled }) => {
+      needAdmin();
+      const b = T.bunks.find(x => x.id === p_bunk);
+      if (!b) throw new Error('No such bunk.');
+      b.disabled_at = p_disabled ? new Date().toISOString() : null;
+      log(p_disabled ? 'disable_bunk' : 'enable_bunk', b.name, {});
+      return true;
     },
 
     admin_set_password: ({ p_user, p_password }) => {
