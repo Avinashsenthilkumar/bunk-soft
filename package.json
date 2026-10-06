@@ -1,15 +1,16 @@
 {
   "name": "bunksoft",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "BunkSoft — petrol bunk management. Subsel Tech Solutions Pvt Ltd.",
   "scripts": {
     "dev": "npx --yes serve web -l 4173",
     "config": "node scripts/write-config.mjs",
     "test": "node test/e2e.mjs",
+    "test:domain": "node test/domain-e2e.mjs",
     "test:admin": "node test/admin-e2e.mjs",
     "test:headers": "node test/headers.mjs",
-    "test:all": "node test/e2e.mjs && node test/admin-e2e.mjs && node test/headers.mjs"
+    "test:all": "node test/e2e.mjs && node test/domain-e2e.mjs && node test/admin-e2e.mjs && node test/headers.mjs"
   },
   "devDependencies": {
     "playwright": "^1.47.0"

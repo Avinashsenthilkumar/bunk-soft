@@ -142,11 +142,17 @@ export const repo = {
   },
 
   /* ---------------------------------------------------- reference data -- */
+  /* Archived products and nozzles are loaded too, carrying an `archived`
+     flag. They used to be filtered out here, which meant historic readings
+     were joined to the CURRENT nozzle list: retiring a dispenser erased its
+     sales from every day it had ever worked. The app hides archived items
+     from the entry forms and from Settings; only reads of the past use
+     them. */
   async loadConfig() {
     const [bunk, products, nozzles] = await Promise.all([
       run('bunk', sb.from('bunks').select('*').eq('id', this.bunkId).single()),
-      run('products', sb.from('products').select('*').eq('bunk_id', this.bunkId).eq('archived', false).order('sort_order')),
-      run('nozzles', sb.from('nozzles').select('*').eq('bunk_id', this.bunkId).eq('archived', false).order('sort_order'))
+      run('products', sb.from('products').select('*').eq('bunk_id', this.bunkId).order('sort_order')),
+      run('nozzles', sb.from('nozzles').select('*').eq('bunk_id', this.bunkId).order('sort_order'))
     ]);
     return {
       station: bunk.name, brand: bunk.brand || '', place: bunk.place || '',
@@ -154,12 +160,26 @@ export const repo = {
       heads: bunk.expense_heads || [],
       products: (products || []).map(p => ({
         id: p.id, code: p.code, name: p.name, short: p.short_name,
-        sell: Number(p.sell_rate), buy: Number(p.buy_rate), sort: p.sort_order
+        sell: Number(p.sell_rate), buy: Number(p.buy_rate), sort: p.sort_order,
+        archived: !!p.archived
       })),
       nozzles: (nozzles || []).map(n => ({
-        id: n.id, name: n.name, product: n.product_id, tank: n.tank_id, sort: n.sort_order
+        id: n.id, name: n.name, product: n.product_id, tank: n.tank_id, sort: n.sort_order,
+        archived: !!n.archived
       }))
     };
+  },
+
+  /* The closing reading each nozzle last carried before `date`, answered from
+     the records rather than from whatever days happen to be in memory. The
+     app used to fall back to 0, and a shift saved that way booked the meter's
+     whole lifetime total as one day's sale. */
+  async lastClosings(date) {
+    const rows = await run('last_closings',
+      sb.rpc('last_closings', { p_bunk: this.bunkId, p_before: date }));
+    const out = {};
+    (rows || []).forEach(r => { out[r.nozzle_id] = Number(r.closing); });
+    return out;
   },
 
   async loadTanks() {
@@ -219,32 +239,50 @@ export const repo = {
   archiveNozzle(id) { return run('archiveNozzle', sb.from('nozzles').update({ archived: true }).eq('id', id)); },
 
   /* --------------------------------------------------------- customers -- */
+  /* The ledger's running balance is walked BACKWARDS from the balance the
+     database computed, not forwards from the opening balance.
+
+     Forwards was wrong the moment the fetch was incomplete: the 2,000-row cap
+     is shared across every customer, so a busy bunk showed a ledger that
+     started from the opening balance but held only part of the history, and
+     its last line disagreed with the outstanding figure above it. Backwards
+     reconciles by construction — the newest row always lands exactly on the
+     balance the view reports, however many older rows were fetched. */
   async loadCustomers() {
+    const LEDGER_ROWS = 4000;
     const [bal, txns] = await Promise.all([
       run('balances', sb.from('customer_balances').select('*').eq('bunk_id', this.bunkId).eq('archived', false)),
       run('txns', sb.from('credit_txns').select('*').eq('bunk_id', this.bunkId)
-        .order('day', { ascending: false }).order('created_at', { ascending: false }).limit(2000))
+        .order('day', { ascending: false }).order('created_at', { ascending: false })
+        .limit(LEDGER_ROWS))
     ]);
+    const truncated = (txns || []).length >= LEDGER_ROWS;
     const byCust = {};
     (txns || []).forEach(t => (byCust[t.customer_id] = byCust[t.customer_id] || []).push(t));
+
     return (bal || []).map(c => {
-      const list = byCust[c.customer_id] || [];
-      /* Walk oldest-first to produce a running balance, then show newest first. */
-      let bal2 = Number(c.opening_balance);
-      const asc = list.slice().reverse().map(t => {
-        bal2 += t.kind === 'payment' ? -Number(t.amount) : Number(t.amount);
-        return {
+      const list = byCust[c.customer_id] || [];      /* newest first */
+      const effect = t => t.kind === 'payment' ? -Number(t.amount) : Number(t.amount);
+      let running = Number(c.balance);               /* the figure the database stands behind */
+      const rows = list.map(t => {
+        const row = {
           id: t.id, date: t.day, type: t.kind, amount: Number(t.amount),
           label: t.kind === 'payment' ? (t.mode || 'Cash') + (t.note ? ' · ' + t.note : '')
                : t.kind === 'opening' ? 'Opening balance'
                : (t.slip_no ? 'Slip ' + t.slip_no : 'Credit sale'),
-          bal: Math.round(bal2 * 100) / 100
+          bal: Math.round(running * 100) / 100       /* balance AFTER this entry */
         };
+        running -= effect(t);                        /* step back to before it */
+        return row;
       });
       return {
         id: c.customer_id, name: c.name, phone: c.phone || '', vehicle: c.vehicle || '',
         limit: Number(c.credit_limit), opening: Number(c.opening_balance),
-        balance: Number(c.balance), txns: asc.reverse()
+        balance: Number(c.balance),
+        /* true when older entries exist that this page did not fetch, so the
+           ledger can say so rather than look complete */
+        partial: truncated && list.length > 0,
+        txns: rows
       };
     }).sort((a, b) => b.balance - a.balance);
   },
@@ -280,13 +318,18 @@ export const repo = {
       rates: (dayRow && dayRow.rates) || {},
       openingCash: dayRow ? Number(dayRow.opening_cash) : 0,
       cashCounted: dayRow && dayRow.cash_counted != null ? Number(dayRow.cash_counted) : null,
-      shifts: {}, receipts: [], dips: [], expenses: [], payments: [], deposits: []
+      shifts: {}, receipts: [], dips: [], expenses: [], payments: [], deposits: [],
+      /* Credit slips whose shift was cleared; see attachCreditSlips. */
+      unassignedCredit: []
     };
     (shifts || []).forEach(s => {
       const readings = {};
       (s.readings || []).forEach(r => {
         readings[r.nozzle_id] = {
-          open: Number(r.opening_reading), close: Number(r.closing_reading), test: Number(r.test_litres)
+          open: Number(r.opening_reading), close: Number(r.closing_reading),
+          test: Number(r.test_litres),
+          /* litres a totalizer wrap swallowed; 0 on an ordinary reading */
+          rollover: Number(r.rollover_add || 0)
         };
       });
       day.shifts[s.name] = {
@@ -296,6 +339,10 @@ export const repo = {
            shift keeps the time it was actually closed, rather than stamping
            it again on every edit. */
         closedAtISO: s.closed_at || null,
+        /* the rate card this shift was closed at, if it is closed */
+        ratesAtClose: s.rates_at_close || null,
+        /* used to detect a second person saving the same shift */
+        updatedAt: s.updated_at || null,
         cash: Number(s.cash), card: Number(s.card), upi: Number(s.upi), bank: Number(s.bank),
         other: { amount: Number(s.other_amount), cost: Number(s.other_cost), note: s.other_note || '' },
         credit: [], readings
@@ -329,6 +376,12 @@ export const repo = {
       .eq('bunk_id', this.bunkId).eq('day', date).eq('kind', 'sale'));
     const byShift = {};
     Object.entries(day.shifts).forEach(([name, s]) => { if (s.id) byShift[s.id] = s; });
+    /* A slip whose shift was cleared keeps its money but loses its shift
+       (credit_txns.shift_id is "on delete set null"). It used to be adopted
+       by whichever shift happened to be first, which inflated that shift's
+       credit and threw its short/excess out. It now sits in the day's own
+       list, counted in the day's totals and shown as unassigned. */
+    day.unassignedCredit = [];
     (rows || []).forEach(t => {
       const slip = {
         id: t.id, cust: t.customer_id, product: t.product_id, qty: t.qty ? Number(t.qty) : 0,
@@ -336,25 +389,42 @@ export const repo = {
       };
       const target = t.shift_id && byShift[t.shift_id];
       if (target) target.credit.push(slip);
-      else {
-        const first = Object.values(day.shifts)[0];
-        if (first) first.credit.push(slip);
-      }
+      else day.unassignedCredit.push(slip);
     });
     return day;
   },
 
-  /* Reports need many days at once; one round trip per table, not per day. */
+  /* Reports need many days at once; one round trip per table, not per day.
+
+     PostgREST caps a response (1000 rows by default, and Supabase will not
+     return more however the query is written). A year of a four-nozzle,
+     two-shift bunk is well past that on the readings alone, so the P&L used
+     to be computed from however much of the period fitted in the cap — a
+     wrong figure, printed with no hint that anything was missing. Every table
+     is now walked in pages until it is exhausted. */
   async loadRange(from, to) {
     const B = this.bunkId;
+    const PAGE = 1000;
+    const all = async (label, build) => {
+      const out = [];
+      for (let page = 0; ; page++) {
+        const rows = await run(label, build().range(page * PAGE, page * PAGE + PAGE - 1));
+        if (!rows || !rows.length) break;
+        out.push(...rows);
+        if (rows.length < PAGE) break;
+        /* A bunk this size is not a real one; stop rather than loop forever. */
+        if (page > 200) break;
+      }
+      return out;
+    };
     const [dayRows, shifts, expenses, receipts, dips, deposits, txns] = await Promise.all([
-      run('r-days', sb.from('business_days').select('*').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-shifts', sb.from('shifts').select('*, readings(*)').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-exp', sb.from('expenses').select('*').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-rec', sb.from('fuel_receipts').select('*').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-dip', sb.from('dip_readings').select('*').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-dep', sb.from('cash_deposits').select('*').eq('bunk_id', B).gte('day', from).lte('day', to)),
-      run('r-txn', sb.from('credit_txns').select('*').eq('bunk_id', B).gte('day', from).lte('day', to))
+      all('r-days', () => sb.from('business_days').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-shifts', () => sb.from('shifts').select('*, readings(*)').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-exp', () => sb.from('expenses').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-rec', () => sb.from('fuel_receipts').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-dip', () => sb.from('dip_readings').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-dep', () => sb.from('cash_deposits').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day')),
+      all('r-txn', () => sb.from('credit_txns').select('*').eq('bunk_id', B).gte('day', from).lte('day', to).order('day'))
     ]);
     const group = (rows, key = 'day') => {
       const m = {}; (rows || []).forEach(r => (m[r[key]] = m[r[key]] || []).push(r)); return m;
@@ -377,7 +447,7 @@ export const repo = {
         };
         const target = t.shift_id && byShift[t.shift_id];
         if (target) target.credit.push(slip);
-        else { const f = Object.values(day.shifts)[0]; if (f) f.credit.push(slip); }
+        else day.unassignedCredit.push(slip);   /* never adopted by shift one */
       });
       out[date] = day;
     });
@@ -404,24 +474,44 @@ export const repo = {
   },
 
   /* One shift and all of its nozzle readings, saved together. */
-  async saveShift(date, name, sh, nozzles) {
+  async saveShift(date, name, sh, nozzles, rates) {
     const row = {
       bunk_id: this.bunkId, day: date, name,
       operator: sh.operator || null, closed: !!sh.closed,
       closed_at: sh.closed ? (sh.closedAtISO || new Date().toISOString()) : null,
       cash: sh.cash || 0, card: sh.card || 0, upi: sh.upi || 0, bank: sh.bank || 0,
       other_amount: sh.other?.amount || 0, other_cost: sh.other?.cost || 0,
-      other_note: sh.other?.note || null
+      other_note: sh.other?.note || null,
+      /* Frozen when the shift closes, so revising a rate afterwards cannot
+         restate a shift that has already been signed and handed over. */
+      rates_at_close: sh.closed ? (sh.ratesAtClose || rates || null) : null
     };
-    const saved = await run('upsertShift', sb.from('shifts')
-      .upsert(row, { onConflict: 'bunk_id,day,name' }).select('id').single());
-    const shiftId = saved.id;
+    /* An upsert alone is last-write-wins: two phones on one shift and a set
+       of readings disappears with nothing to say so. When we know the row we
+       loaded, update THAT revision; 0 rows back means somebody saved in the
+       meantime. */
+    let shiftId;
+    if (sh.id && sh.updatedAt) {
+      const hit = await run('updateShift', sb.from('shifts')
+        .update(row).eq('id', sh.id).eq('updated_at', sh.updatedAt).select('id'));
+      if (!hit || !hit.length) {
+        const e = new Error('Somebody else saved this shift while you were working on it. '
+          + 'Reopen the shift to see their entries before saving yours.');
+        e.code = 'stale'; throw e;
+      }
+      shiftId = hit[0].id;
+    } else {
+      const saved = await run('upsertShift', sb.from('shifts')
+        .upsert(row, { onConflict: 'bunk_id,day,name' }).select('id').single());
+      shiftId = saved.id;
+    }
 
     const rows = (nozzles || []).map(n => {
-      const r = sh.readings[n.id] || { open: 0, close: 0, test: 0 };
+      const r = sh.readings[n.id] || { open: 0, close: 0, test: 0, rollover: 0 };
       return {
         bunk_id: this.bunkId, shift_id: shiftId, nozzle_id: n.id, tank_id: n.tank || null,
-        opening_reading: r.open || 0, closing_reading: r.close || 0, test_litres: r.test || 0
+        opening_reading: r.open || 0, closing_reading: r.close || 0, test_litres: r.test || 0,
+        rollover_add: r.rollover || 0
       };
     });
     if (rows.length) {
@@ -469,11 +559,15 @@ export const repo = {
   },
   deleteReceipt(id) { return run('deleteReceipt', sb.from('fuel_receipts').delete().eq('id', id)); },
 
+  /* The book figure is read on the server, inside the same statement that
+     writes the dip and under a row lock. It used to be sent from the browser:
+     if another device had sold fuel since this page loaded, the gain or loss
+     logged was wrong — and because a dip SETS stock, that error was then baked
+     into the tank. Returns {id, book, dip, variation}. */
   addDip(date, d) {
-    return run('addDip', sb.from('dip_readings').insert({
-      bunk_id: this.bunkId, day: date, tank_id: d.tank, product_id: d.product || null,
-      book_qty: d.book, dip_qty: d.dip
-    }).select('id').single());
+    return run('addDip', sb.rpc('record_dip', {
+      p_bunk: this.bunkId, p_day: date, p_tank: d.tank, p_dip: d.dip
+    }));
   },
   deleteDip(id) { return run('deleteDip', sb.from('dip_readings').delete().eq('id', id)); },
 

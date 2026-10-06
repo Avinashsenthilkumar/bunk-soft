@@ -29,14 +29,20 @@ creates the account for each bunk that buys the software, from a separate
 1. Go to [supabase.com](https://supabase.com) → **New project**.
    Pick a region close to your customers (Mumbai or Singapore for India).
    Save the database password somewhere safe.
-2. Open **SQL Editor** → **New query** and run these three files, in order.
-   Each one is safe to run again.
+2. Open **SQL Editor** → **New query** and run these four files, **in this
+   order**. Each one is safe to run again.
 
    | File | What it does |
    |---|---|
    | [`supabase/schema.sql`](supabase/schema.sql) | Tables, triggers, views and the tenant security policies |
    | [`supabase/admin.sql`](supabase/admin.sql) | The administration layer: who is an admin, and the functions that create accounts |
+   | [`supabase/fixes.sql`](supabase/fixes.sql) | The October 2026 domain fixes: meter rollover, reading validation, server-side dips, frozen shift rates |
    | [`supabase/lock_signups.sql`](supabase/lock_signups.sql) | Optional but recommended — refuses any account not created by an administrator |
+
+   `fixes.sql` must be run on an existing database as well as a new one — the
+   web app from this release expects the columns and functions it adds
+   (`readings.rollover_add`, `shifts.rates_at_close`, `record_dip()`,
+   `last_closings()`). Without it, saving a shift fails.
 
 3. Create the first administrator. Run this once, with your own details:
 
@@ -352,9 +358,11 @@ and phones lose signal mid-save:
 supabase/
   schema.sql              tables, triggers, views, tenant security
   admin.sql               the administration layer — run after schema.sql
+  fixes.sql               the October 2026 domain fixes — run after admin.sql
   lock_signups.sql        optional hard lock on self sign-up
   test_rls.sql            proves tenant isolation, triggers and roles
   test_admin.sql          proves the administration rules
+  test_fixes.sql          proves the domain fixes — 20 checks
   _local_auth_stub.sql    lets the tests run on a plain Postgres
 web/
   index.html              the bunk application
@@ -398,9 +406,14 @@ createdb bunksoft_test
 psql -d bunksoft_test -f supabase/_local_auth_stub.sql
 psql -d bunksoft_test -f supabase/schema.sql
 psql -d bunksoft_test -f supabase/admin.sql
+psql -d bunksoft_test -f supabase/fixes.sql
 psql -d bunksoft_test -f supabase/test_rls.sql      # tenant isolation
 psql -d bunksoft_test -f supabase/test_admin.sql    # administration rules
+psql -d bunksoft_test -f supabase/test_fixes.sql    # the domain fixes
 ```
+
+Run `test_admin.sql` on a database where no administrator exists yet; it calls
+`bootstrap_platform_admin()`, which refuses to run twice.
 
 `test_rls.sql` confirms a second tenant sees zero rows, cross-tenant writes are
 refused, stock trigger arithmetic, the balance view, and that an operator's
@@ -412,13 +425,29 @@ themselves, reset anyone's password or read the audit log; that an
 administrator cannot read a customer's cash figures; that suspension blocks a
 sign-in and keeps the records; and that destructive actions need confirmation.
 
+`test_fixes.sql` runs 20 checks on the October fixes: that a totalizer wrap
+keeps its litres rather than losing the sale, that a backwards reading and
+impossible test litres are both refused, that `record_dip()` reads the book
+figure on the server, that `last_closings()` answers from the records, and that
+an operator cannot delete a shift that has been closed.
+
 **Frontend** — `npm i playwright`, then:
 
 ```bash
-npm test          # a full day at a bunk: shift, stock, credit, cash, reports
+npm test             # a full day at a bunk: shift, stock, credit, cash, reports
+npm run test:domain  # one case per fault found in the October review
 npm run test:admin   # the console: create, suspend, reset, refuse
 npm run test:headers # the security headers and the CSP
+npm run test:all     # all four
 ```
+
+`domain-e2e.mjs` runs 32 checks against the real application: a wrapped meter,
+a mis-keyed closing, test litres beyond the meter movement, a shift closed
+against an unset rate, a retired nozzle whose history must survive, a dip taken
+while another device sells, a credit limit, a negative expense, a deposit
+beyond the cash in hand, two people saving the same shift, expense heads typed
+three ways, a report over days never loaded, and a slip orphaned by a cleared
+shift.
 
 `admin-e2e.mjs` signs a bunk owner into the console and checks it refuses
 them — then calls the admin functions directly as that owner and checks the
@@ -428,7 +457,7 @@ backend refuses each one too, which is what stops a patched page.
 
 ## QA checklist
 
-- [ ] Run all three SQL files, then bootstrap the first administrator
+- [ ] Run all four SQL files — schema, admin, fixes, lock_signups — then bootstrap the first administrator
 - [ ] `/admin/` refuses a wrong password, and refuses a bunk owner who signs in
 - [ ] The app's sign-in page offers no way to create an account
 - [ ] Add a business; the handover card shows username and password
@@ -438,6 +467,14 @@ backend refuses each one too, which is what stops a patched page.
 - [ ] Short/excess reacts to the collection figures
 - [ ] Save & close → report opens → PDF downloads
 - [ ] Decantation raises tank stock; a dip sets it and logs the variation
+- [ ] A closing below its opening offers a meter rollover; declining refuses the save
+- [ ] Test litres larger than the meter movement are refused
+- [ ] A shift cannot be closed while a product it sold has no selling rate
+- [ ] Retire a nozzle in Settings; yesterday's litres and value are unchanged
+- [ ] Revise a rate after closing a shift; the closed shift's value does not move
+- [ ] A credit slip past the customer's limit asks before it is issued
+- [ ] A deposit larger than the cash in hand asks before it is recorded
+- [ ] A report over a period you have not loaded says so before showing figures
 - [ ] Add a credit customer, issue a slip, receive a payment, check the ledger
 - [ ] Cash book: opening + sales + recovery − expenses − deposits = closing
 - [ ] Day report PDF carries readings, sales, credit, stock, expenses, tally

@@ -80,6 +80,9 @@
 </div>
 </div>
 <div id="layer"></div>
+<!-- Toasts live outside #layer, which render() rewrites: a message raised just
+     before a re-render used to be wiped before anyone could read it. -->
+<div id="toasts" aria-live="polite" aria-atomic="false"></div>
 </div>
 
 <script type="module" src="./js/main.js"></script>

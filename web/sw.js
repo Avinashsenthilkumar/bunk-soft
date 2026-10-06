@@ -7,7 +7,8 @@
    available offline, and caching it would leave an administrator's page sitting
    in the browser of whoever used that device next.
    ========================================================================== */
-const CACHE = 'bunksoft-v2';
+const CACHE = 'bunksoft-v3';   /* bumped for the October 2026 fixes: an old cached app.js would
+                                 fail to save a shift against the new schema */
 const SHELL = ['./index.html', './css/app.css', './js/config.js', './js/main.js',
                './js/app.js', './js/db.js', './manifest.webmanifest', './icons/icon.svg'];
 

@@ -82,8 +82,14 @@ ok('3 tanks seeded', (await p.evaluate(()=>window.BunkSoft.S.tanks.length))===3)
 console.log('2. Set rates, then enter and close a shift');
 await p.click('[data-act="rates"]'); await p.waitForTimeout(300);
 const ids = await p.evaluate(()=>window.BunkSoft.S.config.products.map(x=>x.id.replace(/[^a-zA-Z0-9_-]/g,'_')));
-await p.fill('#rt_s_'+ids[0],'102.63'); await p.fill('#rt_b_'+ids[0],'99.35');
-await p.fill('#rt_s_'+ids[1],'94.24');  await p.fill('#rt_b_'+ids[1],'91.72');
+/* Every product that a nozzle dispenses needs a rate: since the October fixes
+   a shift cannot be closed against a product whose selling rate is unset,
+   because the sale would be valued at zero and the whole take shown as short. */
+const RATES = [['102.63','99.35'],['94.24','91.72'],['112.40','108.05']];
+for (let i=0;i<ids.length;i++){
+  const [sell,buy] = RATES[i] || ['100.00','97.00'];
+  await p.fill('#rt_s_'+ids[i],sell); await p.fill('#rt_b_'+ids[i],buy);
+}
 await p.click('[data-act="saverates"]'); await p.waitForTimeout(700);
 ok('rate board updated', (await p.textContent('#rateBoard')).includes('102.63'));
 

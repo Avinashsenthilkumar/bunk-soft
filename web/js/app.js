@@ -25,13 +25,30 @@ const dmy=s=>{if(!s)return '';const[y,m,d]=s.split('-');return d+' '+['Jan','Feb
 const dshort=s=>{const[y,m,d]=s.split('-');return d+'/'+m;};
 const monthStart=s=>s.slice(0,8)+'01';
 const clone=o=>JSON.parse(JSON.stringify(o));
-function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;$('#layer').appendChild(t);setTimeout(()=>t.remove(),2600);}
+/* #toasts is deliberately not #layer: render() rewrites #layer wholesale, so a
+   message raised inside a save — including every error from mutate() — used to
+   be destroyed by the re-render that followed it, before anyone could read it. */
+function toastHost(){
+  let h=$('#toasts');
+  if(!h){h=document.createElement('div');h.id='toasts';h.setAttribute('aria-live','polite');document.body.appendChild(h);}
+  return h;
+}
+function toast(msg){
+  const h=toastHost();
+  const t=document.createElement('div');t.className='toast';t.textContent=msg;
+  h.appendChild(t);
+  /* An error deserves longer on screen than a confirmation. */
+  setTimeout(()=>t.remove(),String(msg).length>70?6000:2800);
+}
 
 /* ============================ state ============================ */
 const S={
   ready:false, preview:false, mode:'loading',
   config:null, tanks:[], customers:[], days:{},
-  date:today(), tab:'dash', shift:null, range:null, modal:null, chartMode:'value', members:[], report:null
+  date:today(), tab:'dash', shift:null, range:null, modal:null, chartMode:'value', members:[], report:null,
+  /* dates actually read from the database, and the opening readings the
+     server gave us for the current date */
+  loadedDates:new Set(), openings:{}
 };
 const CC=['var(--c0)','var(--c1)','var(--c2)','var(--c3)','var(--c4)'];
 const pcol=pid=>{const i=(S.config?.products||[]).findIndex(p=>p.id===pid);return CC[(i<0?4:i)%5];};
@@ -58,24 +75,69 @@ function getDay(date){
 function blankShift(){return {operator:'',readings:{},cash:0,card:0,upi:0,bank:0,credit:[],other:{amount:0,cost:0,note:''},closed:false};}
 const PAYMODES=['Cash','UPI','Card','Bank transfer','Cheque'];
 const isCash=m=>(m||'Cash')==='Cash';
+/* "Diesel", "diesel" and "Diesel " were three separate expense heads in every
+   report. They are one head typed three ways. */
+const headKey=h=>String(h||'Other').trim().toLowerCase();
+function addHead(bag,h,amt){
+  const k=headKey(h); const b=bag[k]||(bag[k]={label:String(h||'Other').trim()||'Other',amount:0});
+  b.amount+=amt; return b;
+}
+const headList=bag=>Object.values(bag).sort((a,b)=>b.amount-a.amount);
 
-/* ============================ derived ============================ */
+/* ============================ derived ============================
+
+   Reference data comes back from the repository with the retired rows
+   included, each carrying `archived`. Two different questions are asked of
+   it, and answering both from one list is what used to lose money:
+
+     activeNozzles()  — what an operator may enter against today
+     nozzlesFor(sh)   — what this shift actually recorded, retired or not
+
+   Retiring a dispenser used to erase its sales from every day it had ever
+   worked, because the historic readings were joined to the current list. */
+const activeNozzles=()=>(S.config?.nozzles||[]).filter(n=>!n.archived);
+const activeProducts=()=>(S.config?.products||[]).filter(p=>!p.archived);
+const nozzle=nid=>(S.config?.nozzles||[]).find(n=>n.id===nid)||null;
+/* every nozzle still in service, plus any archived one this shift has a
+   reading for, in configured order */
+function nozzlesFor(sh){
+  const all=S.config?.nozzles||[], read=sh?.readings||{};
+  return all.filter(n=>!n.archived||read[n.id]!=null);
+}
+/* The sell/buy card a line should be valued at: frozen once a shift closes,
+   live while it is open. Revising a rate no longer restates shifts already
+   closed, signed and handed over. */
+function ratesOf(day,sh){
+  return (sh&&sh.closed&&sh.ratesAtClose)?sh.ratesAtClose:(day.rates||{});
+}
+/* One definition of a sale, matching reading_sold() in the database. */
+const soldOf=r=>Math.max(0,num(r.close)+num(r.rollover)-num(r.open)-num(r.test));
+
 function shiftLines(day,shiftName){
   const sh=day.shifts[shiftName]; if(!sh)return [];
-  return (S.config.nozzles||[]).map(n=>{
-    const r=sh.readings[n.id]||{open:lastClose(day.date,shiftName,n.id),close:0,test:0};
-    const qty=Math.max(0,num(r.close)-num(r.open)-num(r.test));
-    const rate=day.rates[n.product]?.sell||0;
-    return {noz:n,open:num(r.open),close:num(r.close),test:num(r.test),qty,rate,amount:qty*rate};
+  const rates=ratesOf(day,sh);
+  return nozzlesFor(sh).map(n=>{
+    const r=sh.readings[n.id]||{open:lastClose(day.date,shiftName,n.id),close:0,test:0,rollover:0};
+    const qty=soldOf(r);
+    const rate=rates[n.product]?.sell||0;
+    const buy=rates[n.product]?.buy||0;
+    return {noz:n,open:num(r.open),close:num(r.close),test:num(r.test),
+      rollover:num(r.rollover),qty,rate,buy,amount:qty*rate};
   });
 }
+/* The previous closing for a nozzle, from the days held in memory. db.js
+   answers the same question from the records (repo.lastClosings) and that is
+   what the entry form seeds itself from; this is only a fallback for days
+   already loaded, and it no longer silently returns 0 for an unknown nozzle —
+   callers check for null. */
 function lastClose(date,shiftName,nozId){
   const order=S.config.shifts||[]; const idx=order.indexOf(shiftName);
   const d=S.days[date];
   if(d) for(let i=idx-1;i>=0;i--){const r=d.shifts[order[i]]?.readings?.[nozId];if(r&&num(r.close))return num(r.close);}
   const prev=Object.keys(S.days).filter(k=>k<date).sort().reverse();
   for(const k of prev){const dd=S.days[k];for(let i=order.length-1;i>=0;i--){const r=dd.shifts[order[i]]?.readings?.[nozId];if(r&&num(r.close))return num(r.close);}}
-  return 0;
+  const seeded=S.openings&&S.openings[nozId];
+  return seeded!=null?num(seeded):0;
 }
 function shiftTotals(day,shiftName){
   const sh=day.shifts[shiftName]||blankShift(), lines=shiftLines(day,shiftName);
@@ -87,8 +149,16 @@ function shiftTotals(day,shiftName){
   const recv=num(sh.cash)+num(sh.card)+num(sh.upi)+num(sh.bank)+credit;
   return {lines,fuel,qty,test,credit,other,due,recv,diff:recv-due,sh};
 }
+/* Slips that lost their shift when it was cleared. They still owe money, so
+   they belong to the day even though they belong to no shift. */
+const strayCredit=day=>(day.unassignedCredit||[]).reduce((a,b)=>a+num(b.amount),0);
 function dayTotals(date){
-  const day=getDay(date); const out={qty:0,fuel:0,other:0,otherCost:0,cash:0,card:0,upi:0,bank:0,credit:0,diff:0,margin:0,byProd:{},shifts:0,closed:0,expenses:0,recovered:0,received:0};
+  const day=getDay(date); const out={qty:0,fuel:0,other:0,otherCost:0,cash:0,card:0,upi:0,bank:0,
+    credit:0,stray:0,diff:0,margin:0,byProd:{},shifts:0,closed:0,expenses:0,recovered:0,received:0,
+    /* true when a product sold today has no purchase rate on record: the
+       margin below is then understated, and the UI must say so rather than
+       print a profit that counts the fuel as free. */
+    costMissing:false};
   (S.config?.shifts||[]).forEach(nm=>{
     if(!day.shifts[nm])return; out.shifts++;
     const t=shiftTotals(day,nm); if(t.sh.closed)out.closed++;
@@ -96,9 +166,13 @@ function dayTotals(date){
     out.cash+=num(t.sh.cash);out.card+=num(t.sh.card);out.upi+=num(t.sh.upi);out.bank+=num(t.sh.bank);out.credit+=t.credit;out.diff+=t.diff;
     t.lines.forEach(l=>{
       const b=out.byProd[l.noz.product]||(out.byProd[l.noz.product]={qty:0,amount:0,cost:0});
-      b.qty+=l.qty;b.amount+=l.amount;b.cost+=l.qty*(day.rates[l.noz.product]?.buy||0);
+      b.qty+=l.qty;b.amount+=l.amount;b.cost+=l.qty*l.buy;
+      if(l.qty>0&&!l.buy)out.costMissing=true;
     });
   });
+  /* Slips orphaned by a cleared shift are still receivable money. */
+  out.stray=strayCredit(day);
+  out.credit+=out.stray;
   Object.values(out.byProd).forEach(b=>out.margin+=b.amount-b.cost);
   out.margin+=out.other-out.otherCost;
   out.expenses=(day.expenses||[]).reduce((a,b)=>a+num(b.amount),0);
@@ -147,24 +221,38 @@ let BUSY=false;
 export let SESSION_EMAIL='';
 export function setSessionEmail(e){ SESSION_EMAIL=e||''; }
 
+/* Returns true only when the write went through, so a caller can hold back a
+   success message or a report. A failure re-reads the day as well: when the
+   write was refused because somebody else had already saved, the point is to
+   put their entries on screen. */
 async function mutate(fn,okMsg){
-  if(BUSY)return;
+  if(BUSY)return false;
   BUSY=true; renderStatus();
+  let ok=false;
   try{
     await fn();
     await refreshDay();
     if(okMsg)toast(okMsg);
+    ok=true;
   }catch(e){
     toast(e.message||'Could not save.');
+    try{ await refreshDay(); }catch(_){}
   }finally{
     BUSY=false; render();
   }
+  return ok;
 }
 
 async function refreshDay(){
   const d=await repo.loadDay(S.date);
   await repo.attachCreditSlips(S.date,d);
   S.days[S.date]=d;
+  S.loadedDates.add(S.date);
+  /* The opening reading each nozzle last carried, answered from the records.
+     Working it out from whatever days happened to be in memory meant a date
+     outside the loaded window fell back to 0 — and a shift saved that way
+     booked the meter's entire lifetime total as one day's sale. */
+  try{ S.openings=await repo.lastClosings(S.date); }catch(_){ S.openings=S.openings||{}; }
   const [tanks,customers]=await Promise.all([repo.loadTanks(),repo.loadCustomers()]);
   S.tanks=tanks; S.customers=customers;
 }
@@ -173,8 +261,23 @@ async function refreshConfig(){
   S.tanks=await repo.loadTanks();
   if(!S.config.shifts.includes(S.shift))S.shift=S.config.shifts[0];
 }
+/* Which dates have actually been read. A report over a period that was never
+   loaded used to be computed from whatever happened to be in memory and
+   printed as if it were the whole period. */
+function markLoaded(from,to){
+  for(let d=from;d<=to;d=shiftDate(d,1))S.loadedDates.add(d);
+}
+function missingDays(from,to){
+  const miss=[];
+  for(let d=from;d<=to;d=shiftDate(d,1))if(!S.loadedDates.has(d))miss.push(d);
+  return miss;
+}
 async function loadRange(from,to){
-  try{ Object.assign(S.days, await repo.loadRange(from,to)); render(); }
+  try{
+    Object.assign(S.days, await repo.loadRange(from,to));
+    markLoaded(from,to);
+    render();
+  }
   catch(e){ toast(e.message||'Could not load that period.'); }
   return S.days;
 }
@@ -250,7 +353,7 @@ export async function seedDemoData(onProgress){
         const q=Math.round(base*busy*(si===0?1:0.92)*(0.85+rnd(k*3+ni*1.7+si)*0.32));
         const open=meters[n.id], test=(si===0&&ni===0)?5:0, close=open+q+test;
         meters[n.id]=close;
-        sh.readings[n.id]={open,close,test};
+        sh.readings[n.id]={open,close,test,rollover:0};
         sale+=q*(rates[n.product]?.sell||0);
       });
       sh.other.amount=si===0?Math.round(900+rnd(k+9)*1400):Math.round(400+rnd(k+3)*900);
@@ -268,7 +371,8 @@ export async function seedDemoData(onProgress){
       sh.bank=rnd(k*3+si)>.45?Math.round(recv*(0.05+rnd(k+si*2)*0.04)):0;
       sh.cash=Math.round(recv-sh.upi-sh.card-sh.bank);
       dayCash+=sh.cash;
-      const shiftId=await repo.saveShift(date,nm,sh,cfg.nozzles);
+      sh.ratesAtClose={...rates};
+      const shiftId=await repo.saveShift(date,nm,sh,cfg.nozzles,rates);
       for(const s of slips) await repo.addCreditSlip(date,shiftId,s);
     }
     if(k===9)await repo.addReceipt(date,{tank:tankFor(byCode.hsd),product:byCode.hsd,qty:12000,rate:91.72,invoice:'IOC/8841',truck:'TN 45 K 9012'});
@@ -355,7 +459,7 @@ function storageBanner(){
 function renderRateBoard(){
   const d=getDay(S.date);
   $('#rateBoard').innerHTML=`<span class="rbtag">Rate board · ${dmy(S.date)}</span>`+
-    S.config.products.map(p=>`<span class="rbitem"><b>${esc(p.short)}</b><span>₹${nf(d.rates[p.id]?.sell||0,2)}</span></span>`).join('')+
+    activeProducts().map(p=>`<span class="rbitem"><b>${esc(p.short)}</b><span>₹${nf(d.rates[p.id]?.sell||0,2)}</span></span>`).join('')+
     `<button class="rbedit" data-act="rates">Revise rates</button>`;
 }
 
@@ -375,8 +479,12 @@ function vDash(){
 
   <div class="stats">
     ${stat('Collected today',money(t.received),'cash + card + UPI')}
-    ${stat('Gross margin',money(t.margin),'fuel + lubes, before expenses',t.margin>=0?'pos':'neg')}
-    ${stat('Net for the day',money(t.net),t.net>=0?'profit':'loss',t.net>=0?'pos':'neg')}
+    ${t.costMissing
+      ? stat('Gross margin','—','set a purchase rate to see this','wrn')
+      : stat('Gross margin',money(t.margin),'fuel + lubes, before expenses',t.margin>=0?'pos':'neg')}
+    ${t.costMissing
+      ? stat('Net for the day','—','purchase rate missing','wrn')
+      : stat('Net for the day',money(t.net),t.net>=0?'profit':'loss',t.net>=0?'pos':'neg')}
     ${stat('Credit given',money(t.credit),'on '+plural(slips,'slip'))}
     ${stat('Credit recovered',money(t.recovered),'from customers')}
     ${stat('Cash short / excess',diffTxt(t.diff),t.closed+' of '+S.config.shifts.length+' shifts closed',diffCls(t.diff))}
@@ -560,7 +668,7 @@ function lastNDays(n){
 
 /* ---------------- chart ---------------- */
 function chartStacked(days){
-  const prods=S.config.products, W=Math.max(520,days.length*46), H=210, PL=54, PR=12, PT=14, PB=30;
+  const prods=S.config.products.filter(p=>!p.archived||days.some(d=>d.byProd[p.id]?.qty)), W=Math.max(520,days.length*46), H=210, PL=54, PR=12, PT=14, PB=30;
   const val=d=>prods.map(p=>S.chartMode==='value'?(d.byProd[p.id]?.amount||0):(d.byProd[p.id]?.qty||0));
   const tot=days.map(d=>val(d).reduce((a,b)=>a+b,0));
   const max=Math.max(1,...tot), step=niceStep(max), top=Math.ceil(max/step)*step;
@@ -612,19 +720,21 @@ function vShift(){
 
       <div class="sectitle">Nozzle meter readings</div>
       <div class="tw"><table id="nozTable">
-        <thead><tr><th>Nozzle</th><th>Product</th><th class="r">Opening</th><th class="r">Closing</th><th class="r">Test (L)</th><th class="r">Sold (L)</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
+        <thead><tr><th>Nozzle</th><th>Product</th><th class="r">Opening</th><th class="r">Closing</th><th class="r">Test (L)</th><th class="r">Rollover (L)</th><th class="r">Sold (L)</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
         <tbody>${t.lines.map(l=>`<tr data-noz="${esc(l.noz.id)}">
-          <td><b>${esc(l.noz.name)}</b></td>
+          <td><b>${esc(l.noz.name)}</b>${l.noz.archived?' <span class="chip" title="This nozzle has been retired. Its past readings stay on the books.">retired</span>':''}</td>
           <td><span class="chip"><i class="dot" style="background:${pcol(l.noz.product)}"></i>${esc(prod(l.noz.product).short)}</span></td>
           <td class="r"><input class="mono r" type="number" step="0.01" data-fld="open" value="${l.open||''}" style="text-align:right"></td>
           <td class="r"><input class="mono r" type="number" step="0.01" data-fld="close" value="${l.close||''}" style="text-align:right" placeholder="totalizer"></td>
           <td class="r"><input class="mono r" type="number" step="0.01" data-fld="test" value="${l.test||''}" style="text-align:right" placeholder="0"></td>
+          <td class="r"><input class="mono r" type="number" step="1" data-fld="roll" value="${l.rollover||''}" style="text-align:right" placeholder="0" title="Only when the totalizer wrapped past all nines. Use the Check readings button to fill this in."></td>
           <td class="r num" data-out="qty">${nf(l.qty,2)}</td>
           <td class="r num" style="color:var(--ink-3)">${nf(l.rate,2)}</td>
           <td class="r num" data-out="amt">${money(l.amount)}</td></tr>`).join('')}
-          <tr class="totalrow"><td colspan="5">Total</td><td class="r num" id="tQty">${nf(t.qty,2)}</td><td></td><td class="r num" id="tAmt">${money(t.fuel)}</td></tr>
+          <tr class="totalrow"><td colspan="6">Total</td><td class="r num" id="tQty">${nf(t.qty,2)}</td><td></td><td class="r num" id="tAmt">${money(t.fuel)}</td></tr>
         </tbody></table></div>
-      <div class="setupnote">Opening is carried from the previous shift's closing — correct it only if the meter was reset or swapped. Test litres are returned to the tank and are not billed.</div>
+      <div class="setupnote" id="nozWarn">Opening is carried from the previous shift's closing — correct it only if the meter was reset or swapped. Test litres are returned to the tank and are not billed. Rollover stays 0 unless the totalizer wrapped past all nines; if a closing is below its opening the app will offer to record the wrap for you.</div>
+      ${sh.closed&&sh.ratesAtClose?`<div class="setupnote">Valued at the rates this shift was closed at. Later rate revisions do not restate it.</div>`:''}
 
       <div class="sectitle">Credit slips (udhaar)</div>
       <div class="tw"><table><thead><tr><th>Customer</th><th>Vehicle</th><th>Slip no.</th><th class="r">Litres</th><th class="r">Amount</th><th></th></tr></thead>
@@ -634,9 +744,18 @@ function vShift(){
           <td class="r"><button class="x" data-act="delcredit" data-id="${esc(c.id)}" title="Remove slip">✕</button></td></tr>`;}).join('')
           ||'<tr><td colspan="6" class="empty">No credit sales in this shift.</td></tr>'}
         </tbody></table></div>
+      ${(day.unassignedCredit||[]).length?`<div class="setupnote" style="border-color:var(--wrn,#caa)">
+        <b>${plural(day.unassignedCredit.length,'slip')} on this day belongs to no shift</b> — the shift it was entered in was cleared.
+        ${money(strayCredit(day))} is still owed and is counted in the day's credit.
+        <div class="tw" style="margin-top:8px"><table><thead><tr><th>Customer</th><th>Slip no.</th><th class="r">Amount</th><th></th></tr></thead>
+        <tbody>${day.unassignedCredit.map(c=>{const cu=cust(c.cust);return `<tr>
+          <td>${esc(cu?cu.name:'Deleted account')}</td><td class="num">${esc(c.slip||'—')}</td>
+          <td class="r num">${money(c.amount)}</td>
+          <td class="r"><button class="x" data-act="delcredit" data-id="${esc(c.id)}" title="Remove slip">✕</button></td></tr>`;}).join('')}
+        </tbody></table></div></div>`:''}
       ${S.customers.length?`<div class="fr" style="margin-top:10px">
         <label class="f"><span>Customer</span><select id="cr_cust">${S.customers.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></label>
-        <label class="f"><span>Product</span><select id="cr_prod">${S.config.products.map(p=>`<option value="${esc(p.id)}">${esc(p.short)}</option>`).join('')}</select></label>
+        <label class="f"><span>Product</span><select id="cr_prod">${activeProducts().map(p=>`<option value="${esc(p.id)}">${esc(p.short)}</option>`).join('')}</select></label>
         <label class="f"><span>Litres</span><input type="number" step="0.01" id="cr_qty" placeholder="0.00"></label>
         <label class="f"><span>Amount ₹</span><input type="number" step="0.01" id="cr_amt" placeholder="auto"></label>
         <label class="f"><span>Slip no.</span><input type="text" id="cr_slip" placeholder="e.g. 1284"></label>
@@ -663,7 +782,9 @@ function vShift(){
       <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
         <button class="btn" data-act="saveshift">Save shift</button>
         <button class="btn ghost" data-act="saveshift" data-close="1">Save &amp; close shift</button>
-        ${day.shifts[nm]&&(t.qty||t.recv)?'<button class="btn ghost" data-act="clearshift" style="margin-left:auto">Clear this shift</button>':''}
+        ${day.shifts[nm]&&(t.qty||t.recv)&&(!sh.closed||repo.canConfigure())
+          ?'<button class="btn ghost" data-act="clearshift" style="margin-left:auto">Clear this shift</button>':''}
+        ${sh.closed&&!repo.canConfigure()?'<span class="hint" style="margin-left:auto">A closed shift can only be cleared by the owner or a manager.</span>':''}
       </div>
     </div>
   </div>`;
@@ -777,7 +898,7 @@ function vExpense(){
   const day=getDay(S.date), from=monthStart(S.date), to=S.date;
   const rows=[]; let total=0; const byHead={};
   Object.keys(S.days).filter(d=>d>=from&&d<=to).sort().forEach(d=>{
-    (S.days[d].expenses||[]).forEach(e=>{rows.push({...e,date:d});total+=num(e.amount);byHead[e.head]=(byHead[e.head]||0)+num(e.amount);});
+    (S.days[d].expenses||[]).forEach(e=>{rows.push({...e,date:d});total+=num(e.amount);addHead(byHead,e.head,num(e.amount));});
   });
   rows.reverse();
   return `
@@ -801,10 +922,10 @@ function vExpense(){
   <div class="grid g2" style="margin-top:16px">
     <div class="panel" style="margin:0">
       <div class="ph"><h2>Month to date</h2><span class="hint">${dmy(from)} – ${dmy(to)}</span></div>
-      <div class="pb tight"><div class="tw"><table>
+      <div class="pb tight"><div class="tw"><table id="headTable">
         <thead><tr><th>Head</th><th class="r">Amount</th><th class="r">Share</th></tr></thead>
-        <tbody>${Object.keys(byHead).sort((a,b)=>byHead[b]-byHead[a]).map(h=>`<tr><td>${esc(h)}</td><td class="r num">${money(byHead[h])}</td>
-          <td class="r num" style="color:var(--ink-3)">${total?Math.round(byHead[h]/total*100):0}%</td></tr>`).join('')
+        <tbody>${headList(byHead).map(h=>`<tr><td>${esc(h.label)}</td><td class="r num">${money(h.amount)}</td>
+          <td class="r num" style="color:var(--ink-3)">${total?Math.round(h.amount/total*100):0}%</td></tr>`).join('')
           ||'<tr><td colspan="3" class="empty">No expenses this month.</td></tr>'}
           ${total?`<tr class="totalrow"><td>Total</td><td class="r num">${money(total)}</td><td></td></tr>`:''}
         </tbody></table></div></div>
@@ -827,13 +948,17 @@ function reportRange(){
 function vReport(){
   const {from,to}=reportRange();
   const dates=Object.keys(S.days).filter(d=>d>=from&&d<=to).sort();
+  /* Days never read cannot be distinguished from days with no trade, so say
+     so rather than print a profit that is quietly missing a fortnight. */
+  const gap=missingDays(from,to);
   const agg={qty:0,sales:0,cost:0,other:0,otherCost:0,expenses:0,byProd:{},byHead:{},cash:0,card:0,upi:0,bank:0,credit:0,recovered:0,diff:0,varQty:0,varVal:0,days:0};
   dates.forEach(d=>{
     const t=dayTotals(d); if(t.qty||t.expenses||t.other)agg.days++;
+    if(t.costMissing)agg.costMissing=true;
     agg.qty+=t.qty;agg.other+=t.other;agg.otherCost+=t.otherCost;agg.expenses+=t.expenses;
     agg.cash+=t.cash;agg.card+=t.card;agg.upi+=t.upi;agg.bank+=t.bank;agg.credit+=t.credit;agg.recovered+=t.recovered;agg.diff+=t.diff;
     Object.entries(t.byProd).forEach(([p,b])=>{const x=agg.byProd[p]||(agg.byProd[p]={qty:0,amount:0,cost:0});x.qty+=b.qty;x.amount+=b.amount;x.cost+=b.cost;agg.sales+=b.amount;agg.cost+=b.cost;});
-    (S.days[d].expenses||[]).forEach(e=>agg.byHead[e.head]=(agg.byHead[e.head]||0)+num(e.amount));
+    (S.days[d].expenses||[]).forEach(e=>addHead(agg.byHead,e.head,num(e.amount)));
     (S.days[d].dips||[]).forEach(dp=>{const v=num(dp.dip)-num(dp.book);agg.varQty+=v;agg.varVal+=v*(S.days[d].rates?.[dp.product]?.buy||0);});
   });
   const grossFuel=agg.sales-agg.cost, grossOther=agg.other-agg.otherCost;
@@ -841,14 +966,14 @@ function vReport(){
   const chartDays=dates.slice(-31).map(d=>{const t=dayTotals(d);return {date:d,byProd:t.byProd,value:t.fuel,qty:t.qty,hasData:!!t.qty};});
   const pl=[
     ['Fuel sales',agg.sales,'h'],
-    ...S.config.products.filter(p=>agg.byProd[p.id]?.qty).map(p=>['   '+p.name+' · '+nf(agg.byProd[p.id].qty,0)+' L',agg.byProd[p.id].amount,'s']),
+    ...S.config.products.filter(p=>agg.byProd[p.id]?.qty).map(p=>['   '+esc(p.name)+(p.archived?' (retired)':'')+' · '+nf(agg.byProd[p.id].qty,0)+' L',agg.byProd[p.id].amount,'s']),
     ['Less: cost of fuel sold',-agg.cost,''],
     ['Gross margin on fuel',grossFuel,'t'],
     ['Lube &amp; other sales',agg.other,''],
     ['Less: cost of lubes',-agg.otherCost,''],
     ['Stock variation (dip vs book)',agg.varVal,''],
     ['Gross profit',gross,'t'],
-    ...Object.keys(agg.byHead).sort((a,b)=>agg.byHead[b]-agg.byHead[a]).map(h=>['   '+h,-agg.byHead[h],'s']),
+    ...headList(agg.byHead).map(h=>['   '+esc(h.label),-h.amount,'s']),
     ['Total expenses',-agg.expenses,''],
     ['Net profit',net,'g']
   ];
@@ -864,7 +989,9 @@ function vReport(){
       <label class="f"><span>From</span><input type="date" id="rg_from" value="${from}"></label>
       <label class="f"><span>To</span><input type="date" id="rg_to" value="${to}"></label>
       <button class="btn" data-act="applyrange">Apply</button>
-    </div><div class="setupnote">${dmy(from)} – ${dmy(to)} · ${agg.days} business day${agg.days===1?'':'s'} with entries</div></div>
+    </div><div class="setupnote">${dmy(from)} – ${dmy(to)} · ${agg.days} business day${agg.days===1?'':'s'} with entries</div>
+    ${gap.length?`<div class="setupnote" style="color:#c0392b"><b>${plural(gap.length,'day')} in this period has not been read from the database yet</b>
+      — the figures below would be understated. <button class="btn sm" data-act="loadperiod">Load the whole period</button></div>`:''}</div>
   </div>
 
   <div class="stats">
@@ -879,6 +1006,9 @@ function vReport(){
   <div class="grid g23" style="margin-top:16px">
     <div class="panel" style="margin:0">
       <div class="ph"><h2>Profit &amp; loss</h2><span class="spacer"></span><button class="btn ghost sm" data-act="export-pl">Export CSV</button></div>
+      ${agg.costMissing?`<div class="pb" style="padding-bottom:0"><div class="setupnote" style="color:#c0392b;margin:0">
+        A product sold in this period has no purchase rate on record, so the cost of fuel sold — and every profit line below it — is understated.
+        Set it under <b>Revise rates</b> for the days concerned.</div></div>`:''}
       <div class="pb tight"><div class="tw"><table>
         <tbody>${pl.map(([k,v,kind])=>`<tr class="${kind==='t'||kind==='g'?'totalrow':''}">
           <td style="${kind==='s'?'color:var(--ink-3);font-size:12.5px':kind==='g'?'font-weight:600':''}">${k}</td>
@@ -949,7 +1079,7 @@ function vSetup(){
     <div class="ph"><h2>Products &amp; rates</h2><span class="hint">selling rate applies to new days; use “Revise rates” for a mid-day change</span></div>
     <div class="pb tight"><div class="tw"><table>
       <thead><tr><th>Name</th><th>Short</th><th class="r">Selling ₹/L</th><th class="r">Purchase ₹/L</th><th class="r">Margin</th><th></th></tr></thead>
-      <tbody>${c.products.map(p=>`<tr data-pid="${esc(p.id)}">
+      <tbody>${c.products.filter(p=>!p.archived).map(p=>`<tr data-pid="${esc(p.id)}">
         <td><span class="chip"><i class="dot" style="background:${pcol(p.id)}"></i></span> <input type="text" data-pf="name" value="${esc(p.name)}" style="width:150px;display:inline-block"></td>
         <td><input type="text" data-pf="short" value="${esc(p.short)}" style="width:72px"></td>
         <td class="r"><input type="number" step="0.01" data-pf="sell" value="${p.sell}" style="text-align:right"></td>
@@ -968,7 +1098,7 @@ function vSetup(){
       <thead><tr><th>Name</th><th>Product</th><th class="r">Capacity (L)</th><th class="r">Book stock (L)</th><th class="r">Reorder at</th><th></th></tr></thead>
       <tbody>${S.tanks.map(t=>`<tr data-tid="${esc(t.id)}">
         <td><input type="text" data-tf="name" value="${esc(t.name)}" style="width:130px"></td>
-        <td><select data-tf="product">${c.products.map(p=>`<option value="${esc(p.id)}"${p.id===t.product?' selected':''}>${esc(p.short)}</option>`).join('')}</select></td>
+        <td><select data-tf="product">${c.products.filter(p=>!p.archived).map(p=>`<option value="${esc(p.id)}"${p.id===t.product?' selected':''}>${esc(p.short)}</option>`).join('')}</select></td>
         <td class="r"><input type="number" data-tf="capacity" value="${t.capacity}" style="text-align:right"></td>
         <td class="r num" title="Book stock is maintained by the database. Correct it with a dip reading under Stock.">${nf(t.stock,2)}</td>
         <td class="r"><input type="number" data-tf="min" value="${t.min||0}" style="text-align:right"></td>
@@ -987,9 +1117,9 @@ function vSetup(){
     <div class="ph"><h2>Nozzles</h2><span class="hint">one row per gun on the forecourt</span></div>
     <div class="pb tight"><div class="tw"><table>
       <thead><tr><th>Label</th><th>Product</th><th>Draws from</th><th></th></tr></thead>
-      <tbody>${c.nozzles.map(n=>`<tr data-nid="${esc(n.id)}">
+      <tbody>${c.nozzles.filter(n=>!n.archived).map(n=>`<tr data-nid="${esc(n.id)}">
         <td><input type="text" data-nf="name" value="${esc(n.name)}" style="width:150px"></td>
-        <td><select data-nf="product">${c.products.map(p=>`<option value="${esc(p.id)}"${p.id===n.product?' selected':''}>${esc(p.short)}</option>`).join('')}</select></td>
+        <td><select data-nf="product">${c.products.filter(p=>!p.archived).map(p=>`<option value="${esc(p.id)}"${p.id===n.product?' selected':''}>${esc(p.short)}</option>`).join('')}</select></td>
         <td><select data-nf="tank">${S.tanks.map(t=>`<option value="${esc(t.id)}"${t.id===n.tank?' selected':''}>${esc(t.name)}</option>`).join('')}</select></td>
         <td class="r"><button class="x" data-act="delnoz" data-id="${esc(n.id)}">✕</button></td></tr>`).join('')
         ||'<tr><td colspan="4" class="empty">No nozzles yet.</td></tr>'}
@@ -1045,18 +1175,30 @@ function vSetup(){
 /* ============================ live calculation ============================ */
 function wireLive(){
   const tbl=$('#nozTable'); if(!tbl)return;
+  const warn=$('#nozWarn'); if(warn&&!warn.dataset.orig)warn.dataset.orig=warn.innerHTML;
   const recalc=()=>{
     const day=getDay(S.date);
-    let tq=0,ta=0;
+    const rates=ratesOf(day,day.shifts[S.shift]);
+    let tq=0,ta=0; const bad=[];
     $$('#nozTable tbody tr[data-noz]').forEach(tr=>{
-      const nz=S.config.nozzles.find(n=>n.id===tr.dataset.noz); if(!nz)return;
+      const nz=nozzle(tr.dataset.noz); if(!nz)return;
       const g=f=>num($(`input[data-fld="${f}"]`,tr)?.value);
-      const q=Math.max(0,g('close')-g('open')-g('test')), rate=day.rates[nz.product]?.sell||0;
+      const moved=g('close')+g('roll')-g('open');
+      const q=Math.max(0,moved-g('test')), rate=rates[nz.product]?.sell||0;
       $('[data-out="qty"]',tr).textContent=nf(q,2);
       $('[data-out="amt"]',tr).textContent=money(q*rate);
+      /* Flag the two readings that cannot be true, rather than silently
+         flooring the litres at zero and losing the sale. */
+      if(moved<0)bad.push(nz.name+': closing is below opening');
+      else if(g('test')>moved)bad.push(nz.name+': test litres exceed what passed the meter');
       tq+=q; ta+=q*rate;
     });
     $('#tQty').textContent=nf(tq,2); $('#tAmt').textContent=money(ta);
+    const w=$('#nozWarn');
+    if(w){
+      if(bad.length){ w.style.color='#c0392b'; w.innerHTML='<b>Check these readings:</b> '+bad.map(esc).join('; ')+'.'; }
+      else if(w.dataset.orig){ w.style.color=''; w.innerHTML=w.dataset.orig; }
+    }
     const sh=day.shifts[S.shift]||blankShift();
     const credit=(sh.credit||[]).reduce((a,b)=>a+num(b.amount),0);
     const other=num($('#f_other')?.value), due=ta+other;
@@ -1071,7 +1213,7 @@ function wireLive(){
     ['f_cash','f_card','f_upi','f_bank','f_other'].forEach(id=>$('#'+id)?.addEventListener(ev,recalc));
   });
   const q=$('#cr_qty'), a=$('#cr_amt'), p=$('#cr_prod');
-  const sync=()=>{const r=getDay(S.date).rates[p.value]?.sell||0; if(num(q.value))a.value=(num(q.value)*r).toFixed(2);};
+  const sync=()=>{if(!q||!p)return;const r=getDay(S.date).rates[p.value]?.sell||0; if(num(q.value))a.value=(num(q.value)*r).toFixed(2);};
   q?.addEventListener('input',sync); p?.addEventListener('change',sync);
 }
 
@@ -1126,7 +1268,10 @@ document.addEventListener('click',async e=>{
     /* ---- shift ---- */
     'saveshift':()=>saveShift(b.dataset.close==='1'),
     'clearshift':()=>{
-      if(!confirm('Clear all entries for the '+S.shift+' shift on '+dmy(S.date)+'?'))return;
+      const cs=getDay(S.date).shifts[S.shift];
+      if(cs&&cs.closed&&!repo.canConfigure())return toast('A closed shift can only be cleared by the owner or a manager.');
+      if(!confirm('Clear all entries for the '+S.shift+' shift on '+dmy(S.date)+'?'+
+        (cs&&cs.closed?'\n\nThis shift is closed. Clearing it removes its readings and moves the tank stock back.':'')))return;
       return mutate(()=>repo.deleteShift(S.date,S.shift),'Shift cleared.');
     },
     'shiftreport':()=>openShiftReport(S.date,b.dataset.shift),
@@ -1149,7 +1294,10 @@ document.addEventListener('click',async e=>{
 
     /* ---- expenses & cash ---- */
     'addexpense':()=>{
-      const amt=num($('#ex_amt').value); if(!amt)return toast('Enter an amount.');
+      const amt=num($('#ex_amt').value);
+      /* A negative expense is a credit entered in the wrong place; it used to
+         be accepted and quietly raised the day's profit. */
+      if(amt<=0)return toast('Enter an amount greater than zero.');
       return mutate(()=>repo.addExpense(S.date,{head:$('#ex_head').value,mode:$('#ex_mode').value,
         amount:amt,note:$('#ex_note').value.trim()}),'Expense added.');
     },
@@ -1164,7 +1312,16 @@ document.addEventListener('click',async e=>{
       toast('Carried '+money(v)+' from '+dmy(prev)+'. Press Save to confirm.');
     },
     'adddeposit':()=>{
-      const amt=num($('#dp_amt').value); if(!amt)return toast('Enter an amount.');
+      const amt=num($('#dp_amt').value);
+      if(amt<=0)return toast('Enter an amount greater than zero.');
+      /* You cannot bank cash that is not in the drawer. Allowed on a
+         confirmation, because the drawer may hold cash carried over that was
+         never entered as an opening balance. */
+      const cb=cashBook(S.date);
+      if(amt>cb.closing+0.5&&
+         !confirm('The cash book shows only '+money(cb.closing)+' in hand today.\n\n'+
+                  'Banking '+money(amt)+' will leave the drawer '+money(amt-cb.closing)+
+                  ' short.\n\nRecord it anyway?')) return;
       return mutate(()=>repo.addDeposit(S.date,{amount:amt,bank:$('#dp_bank').value.trim(),
         ref:$('#dp_ref').value.trim()}),'Deposit recorded.');
     },
@@ -1172,6 +1329,7 @@ document.addEventListener('click',async e=>{
 
     /* ---- reports ---- */
     'range':()=>setRange(b.dataset.r),
+    'loadperiod':()=>{const {from,to}=reportRange();return loadRange(from,to);},
     'applyrange':()=>{const f=$('#rg_from').value,t=$('#rg_to').value;
       if(f&&t){S.range={from:f,to:t};loadRange(f,t);render();}},
     'copy-shift':()=>copyText(shiftText(S.report.date,S.report.shift)),
@@ -1185,7 +1343,7 @@ document.addEventListener('click',async e=>{
     'rates':()=>openRates(),
     'saverates':()=>{
       const rates={};
-      S.config.products.forEach(p=>{rates[p.id]={sell:num($('#rt_s_'+cssId(p.id)).value),
+      activeProducts().forEach(p=>{rates[p.id]={sell:num($('#rt_s_'+cssId(p.id)).value),
         buy:num($('#rt_b_'+cssId(p.id)).value)};});
       S.modal=null;
       return mutate(()=>repo.saveRates(S.date,rates),'Rates revised for '+dmy(S.date)+'.');
@@ -1212,7 +1370,7 @@ document.addEventListener('click',async e=>{
     },'Products saved.'),
     'addprod':()=>mutate(async()=>{
       await repo.saveProduct({name:'New product',short:'NEW',sell:0,buy:0,
-        sort:(S.config.products.length||0)+1});
+        sort:(activeProducts().length||0)+1});
       await refreshConfig();
     },'Product added.'),
     'delprod':()=>mutate(async()=>{ await repo.archiveProduct(b.dataset.id); await refreshConfig(); },'Product removed.'),
@@ -1227,14 +1385,14 @@ document.addEventListener('click',async e=>{
       await refreshConfig();
     },'Tanks saved.'),
     'addtank':()=>mutate(async()=>{
-      await repo.saveTank({name:'Tank '+(S.tanks.length+1),product:S.config.products[0]?.id,
+      await repo.saveTank({name:'Tank '+(S.tanks.length+1),product:activeProducts()[0]?.id,
         capacity:10000,min:1500,sort:S.tanks.length+1});
       await refreshConfig();
     },'Tank added.'),
     'deltank':()=>mutate(async()=>{ await repo.archiveTank(b.dataset.id); await refreshConfig(); },'Tank removed.'),
     'savenoz':()=>mutate(async()=>{
       for(const tr of $$('#view tr[data-nid]')){
-        const n=S.config.nozzles.find(x=>x.id===tr.dataset.nid); if(!n)continue;
+        const n=nozzle(tr.dataset.nid); if(!n)continue;
         const upd={...n};
         $$('[data-nf]',tr).forEach(i=>upd[i.dataset.nf]=i.value.trim());
         await repo.saveNozzle(upd);
@@ -1242,8 +1400,8 @@ document.addEventListener('click',async e=>{
       await refreshConfig();
     },'Nozzles saved.'),
     'addnoz':()=>mutate(async()=>{
-      await repo.saveNozzle({name:'DU-? / N'+(S.config.nozzles.length+1),
-        product:S.config.products[0]?.id,tank:S.tanks[0]?.id,sort:S.config.nozzles.length+1});
+      await repo.saveNozzle({name:'DU-? / N'+(activeNozzles().length+1),
+        product:activeProducts()[0]?.id,tank:S.tanks[0]?.id,sort:activeNozzles().length+1});
       await refreshConfig();
     },'Nozzle added.'),
     'delnoz':()=>mutate(async()=>{ await repo.archiveNozzle(b.dataset.id); await refreshConfig(); },'Nozzle removed.'),
@@ -1281,13 +1439,78 @@ function setRange(r){
   loadRange(S.range.from,S.range.to); render();
 }
 
-/* ---- shift save ---- */
+/* ---- shift save ----
+   Nothing is written until every reading can be true. A closing below its
+   opening is either a typo or a totalizer that wrapped past all nines; the
+   operator says which, and a wrap is recorded as litres rather than being
+   floored away. */
+function readMeterRows(){
+  const rows=[];
+  $$('#nozTable tbody tr[data-noz]').forEach(tr=>{
+    const g=f=>num($(`input[data-fld="${f}"]`,tr)?.value);
+    rows.push({tr,id:tr.dataset.noz,noz:nozzle(tr.dataset.noz),
+      open:g('open'),close:g('close'),test:g('test'),roll:g('roll')});
+  });
+  return rows;
+}
+/* 10^digits for the meter: an eight-digit head wrapping at 99,999,999 gives
+   back 100,000,000 litres. Taken from the width of the opening reading. */
+const wrapSpan=open=>Math.pow(10,Math.max(4,String(Math.floor(Math.abs(open))).length));
+
+function checkMeters(rows){
+  for(const r of rows){
+    const name=r.noz?r.noz.name:'This nozzle';
+    if(r.open<0||r.close<0)return name+': a meter reading cannot be negative.';
+    if(r.test<0)return name+': test litres cannot be negative.';
+    let moved=r.close+r.roll-r.open;
+    if(moved<0){
+      const span=wrapSpan(r.open);
+      if(r.close+span-r.open>=0&&confirm(name+': the closing reading ('+nf(r.close,2)+
+         ') is below the opening ('+nf(r.open,2)+').\n\nDid the totalizer roll over past all nines?\n\n'+
+         'OK records a rollover of '+nf(span,0)+' L, giving '+nf(r.close+span-r.open-r.test,2)+
+         ' L sold.\nCancel lets you correct the reading.')){
+        r.roll=span;
+        const el=$('input[data-fld="roll"]',r.tr); if(el)el.value=String(span);
+        moved=r.close+r.roll-r.open;
+      } else {
+        return name+': the closing reading is below the opening. Correct it, or confirm a rollover.';
+      }
+    }
+    if(r.test>moved)return name+': test litres ('+nf(r.test,2)+') exceed the '+nf(moved,2)+
+      ' litres that passed this meter.';
+  }
+  return null;
+}
+
 function saveShift(close){
   const day=getDay(S.date), nm=S.shift;
   const sh=day.shifts[nm]||blankShift();
   const wasClosed=!!sh.closed;
+  const rows=readMeterRows();
+  const bad=checkMeters(rows);
+  if(bad){ toast(bad); return; }
+
+  const closing=close?true:$('#f_closed').value==='1';
+  /* A shift cannot be closed against a rate card that is not set: the sale
+     would be valued at zero and the handover would show the whole take as
+     short. The margin needs the purchase rate too, but that is a warning. */
+  if(closing){
+    const sold={}; rows.forEach(r=>{const q=Math.max(0,r.close+r.roll-r.open-r.test);
+      if(q>0&&r.noz)sold[r.noz.product]=(sold[r.noz.product]||0)+q;});
+    const rates=day.rates||{};
+    const noSell=Object.keys(sold).filter(pid=>!num(rates[pid]?.sell));
+    if(noSell.length){
+      toast('Set today\'s selling rate for '+noSell.map(pid=>prod(pid).short).join(', ')+
+            ' before closing this shift.');
+      return;
+    }
+    const noBuy=Object.keys(sold).filter(pid=>!num(rates[pid]?.buy));
+    if(noBuy.length&&!confirm('No purchase rate is set for '+noBuy.map(pid=>prod(pid).short).join(', ')+
+        '.\n\nThe shift will close correctly, but the margin cannot be worked out until you enter it under Revise rates.\n\nClose the shift anyway?')) return;
+  }
+
   sh.operator=$('#f_operator').value.trim();
-  sh.closed=close?true:$('#f_closed').value==='1';
+  sh.closed=closing;
   /* Stamp the close time once. The database keeps closed_at, and db.js falls
      back to now() whenever closedAtISO is absent — so without carrying the
      original forward, every later edit to a closed shift would quietly move
@@ -1298,16 +1521,20 @@ function saveShift(close){
   sh.upi=num($('#f_upi').value);   sh.bank=num($('#f_bank').value);
   sh.other={amount:num($('#f_other').value),cost:num($('#f_othercost').value),note:sh.other?.note||''};
   sh.readings=sh.readings||{};
-  $$('#nozTable tbody tr[data-noz]').forEach(tr=>{
-    const g=f=>num($(`input[data-fld="${f}"]`,tr)?.value);
-    sh.readings[tr.dataset.noz]={open:g('open'),close:g('close'),test:g('test')};
-  });
+  rows.forEach(r=>{ sh.readings[r.id]={open:r.open,close:r.close,test:r.test,rollover:r.roll}; });
+  /* Freeze the rate card onto the shift as it closes, so a later revision
+     does not restate a handover that has already been signed. */
+  if(sh.closed&&!sh.ratesAtClose)sh.ratesAtClose=clone(day.rates||currentRates());
+  if(!sh.closed)sh.ratesAtClose=null;
   day.shifts[nm]=sh;
   /* The database recalculates tank stock from the readings we send. */
   return mutate(async()=>{
     await repo.ensureDay(S.date,day.rates&&Object.keys(day.rates).length?day.rates:currentRates());
-    await repo.saveShift(S.date,nm,sh,S.config.nozzles);
-  }).then(()=>{
+    /* nozzlesFor, not the active list: a retired nozzle this shift still has
+       a reading for must keep being written, or its litres vanish. */
+    await repo.saveShift(S.date,nm,sh,nozzlesFor(sh),day.rates||currentRates());
+  }).then(ok=>{
+    if(!ok)return;
     if(sh.closed&&(close||!wasClosed)){ openShiftReport(S.date,nm); toast(nm+' shift closed.'); }
     else toast('Shift saved.');
   });
@@ -1317,14 +1544,22 @@ function addCredit(){
   const day=getDay(S.date), nm=S.shift;
   const cid=$('#cr_cust').value, pid=$('#cr_prod').value, qty=num($('#cr_qty').value);
   let amt=num($('#cr_amt').value); if(!amt&&qty)amt=qty*(day.rates[pid]?.sell||0);
-  if(!amt)return toast('Enter litres or an amount.');
+  if(qty<0)return toast('Litres cannot be negative.');
+  if(amt<=0)return toast('Enter litres or an amount.');
   const c=cust(cid); if(!c)return toast('Pick a customer.');
+  /* A credit limit that is never enforced is a limit in name only. The owner
+     can still allow it — the point is that it is a decision, not an accident. */
+  const limit=num(c.limit);
+  if(limit&&num(c.balance)+amt>limit&&
+     !confirm(c.name+' has a credit limit of '+money(limit)+' and owes '+money(c.balance)+'.\n\n'+
+              'This slip takes the outstanding to '+money(num(c.balance)+amt)+
+              ', which is '+money(num(c.balance)+amt-limit)+' over the limit.\n\nIssue it anyway?')) return;
   const sh=day.shifts[nm];
   return mutate(async()=>{
     let shiftId=sh&&sh.id;
     if(!shiftId){   /* a slip before the shift is saved still needs a shift row */
       await repo.ensureDay(S.date,currentRates());
-      shiftId=await repo.saveShift(S.date,nm,sh||blankShift(),S.config.nozzles);
+      shiftId=await repo.saveShift(S.date,nm,sh||blankShift(),activeNozzles(),day.rates||currentRates());
     }
     await repo.addCreditSlip(S.date,shiftId,{cust:cid,product:pid,qty,amount:amt,
       vehicle:c.vehicle||'',slip:$('#cr_slip').value.trim()});
@@ -1333,19 +1568,34 @@ function addCredit(){
 
 function addReceipt(){
   const tid=$('#rc_tank').value, qty=num($('#rc_qty').value), rate=num($('#rc_rate').value);
-  if(!qty)return toast('Enter the quantity decanted.');
-  const t=tank(tid); if(!t)return;
+  if(qty<=0)return toast('Enter the quantity decanted.');
+  if(rate<0)return toast('The purchase rate cannot be negative.');
+  const t=tank(tid); if(!t)return toast('Pick a tank.');
+  /* A decantation larger than the tank can hold is a typo — 80000 for 8000. */
+  const room=num(t.capacity)-num(t.stock);
+  if(num(t.capacity)&&qty>room&&
+     !confirm(t.name+' holds '+nf(t.capacity,0)+' L and already has '+nf(t.stock,0)+' L in it, '+
+              'so only '+nf(Math.max(0,room),0)+' L will fit.\n\nRecord '+nf(qty,0)+' L anyway?')) return;
   return mutate(()=>repo.addReceipt(S.date,{tank:tid,product:t.product,qty,rate,
     invoice:$('#rc_inv').value.trim(),truck:$('#rc_truck').value.trim()}),
     nf(qty,0)+' L decanted into '+t.name+'.');
 }
+/* The dip SETS the tank, so the book figure it is compared against must be the
+   one in the database at that instant, not the one this browser last saw. The
+   repository asks the server to read it inside the same statement. */
 function addDip(){
   const tid=$('#dp_tank').value;
   if($('#dp_qty').value==='')return toast('Enter the dip quantity.');
-  const dip=num($('#dp_qty').value), t=tank(tid); if(!t)return;
-  const v=dip-num(t.stock);
-  return mutate(()=>repo.addDip(S.date,{tank:tid,product:t.product,book:num(t.stock),dip}),
-    v>=0?'Gain of '+nf(v,0)+' L recorded.':'Loss of '+nf(Math.abs(v),0)+' L recorded.');
+  const dip=num($('#dp_qty').value), t=tank(tid); if(!t)return toast('Pick a tank.');
+  if(dip<0)return toast('A dip cannot be negative.');
+  let res=null;
+  return mutate(async()=>{ res=await repo.addDip(S.date,{tank:tid,dip}); })
+    .then(ok=>{
+      if(!ok)return;
+      const v=res&&res.variation!=null?Number(res.variation):dip-num(t.stock);
+      toast(Math.abs(v)<0.5?'Dip matches the book figure.'
+        :(v>0?'Gain of '+nf(v,0)+' L recorded.':'Loss of '+nf(Math.abs(v),0)+' L recorded.'));
+    });
 }
 
 /* ---- modals ---- */
@@ -1359,7 +1609,7 @@ function openRates(){
   const day=getDay(S.date);
   S.modal=wrapModal('Revise rates · '+dmy(S.date),
     `<div class="setupnote" style="margin:0 0 12px">Oil companies revise the retail price at 6 a.m. Changing it here applies to this date only; Setup holds the standing rate for new days.</div>`+
-    S.config.products.map(p=>`<div class="fr" style="margin-bottom:10px">
+    activeProducts().map(p=>`<div class="fr" style="margin-bottom:10px">
       <label class="f"><span>${esc(p.name)} — selling ₹/L</span><input type="number" step="0.01" id="rt_s_${cssId(p.id)}" value="${day.rates[p.id]?.sell||0}"></label>
       <label class="f"><span>Purchase ₹/L</span><input type="number" step="0.01" id="rt_b_${cssId(p.id)}" value="${day.rates[p.id]?.buy||0}"></label>
     </div>`).join(''),
@@ -1391,7 +1641,7 @@ function openPay(id){
     `<div class="setupnote" style="margin:0 0 12px">Outstanding today: <b class="num">${money(c.balance)}</b></div>
      <div class="fr">
       <label class="f"><span>Amount ₹</span><input type="number" step="0.01" id="pm_amt" data-cust="${esc(id)}" placeholder="0"></label>
-      <label class="f"><span>Mode</span><select id="pm_mode"><option>Cash</option><option>UPI</option><option>NEFT</option><option>Cheque</option></select></label>
+      <label class="f"><span>Mode</span><select id="pm_mode">${PAYMODES.map(m=>`<option>${esc(m)}</option>`).join('')}</select></label>
       <label class="f"><span>Note</span><input type="text" id="pm_note" placeholder="ref no."></label>
      </div>`,
     `<button class="btn ghost" data-act="closemodal">Cancel</button><button class="btn" data-act="savepay">Record receipt</button>`);
@@ -1399,7 +1649,13 @@ function openPay(id){
 }
 function savePayForm(){
   const el=$('#pm_amt'), amt=num(el.value), c=cust(el.dataset.cust);
-  if(!amt||!c)return toast('Enter an amount.');
+  if(!c)return toast('Pick a customer.');
+  if(amt<=0)return toast('Enter an amount greater than zero.');
+  /* Paying more than is owed leaves the account in credit. Legitimate as an
+     advance, but worth a glance — it is usually a mistyped figure. */
+  if(amt>num(c.balance)+0.5&&
+     !confirm(c.name+' owes '+money(c.balance)+'.\n\nReceiving '+money(amt)+' leaves '+
+              money(amt-num(c.balance))+' as an advance.\n\nRecord it anyway?')) return;
   const row={cust:c.id,amount:amt,mode:$('#pm_mode').value,note:$('#pm_note').value.trim()};
   S.modal=null;
   return mutate(()=>repo.addPayment(S.date,row),money(amt)+' received from '+c.name+'.');
@@ -1413,6 +1669,7 @@ function openLedger(id){
       ${stat('Limit',num(c.limit)?money(c.limit):'—',num(c.limit)&&num(c.balance)>num(c.limit)?'over limit':'within limit',num(c.limit)&&num(c.balance)>num(c.limit)?'neg':'')}
       ${stat('Phone',esc(c.phone||'—'),'')}
     </div>
+    ${c.partial?`<div class="setupnote" style="margin:0 0 10px">Only the most recent transactions are shown. The outstanding figure above is the full balance from the database; the running balance in the last rows of this list starts from the oldest entry shown.</div>`:''}
     <div class="tw" style="max-height:44vh;overflow-y:auto"><table><thead><tr><th>Date</th><th>Detail</th><th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
     <tbody>${rows.length?rows.map(t=>`<tr><td class="num">${dshort(t.date)}</td><td>${esc(t.label||t.ref||'')}</td>
       <td class="r num">${t.type!=='payment'?money(t.amount):''}</td><td class="r num">${t.type==='payment'?money(t.amount):''}</td>
@@ -1429,7 +1686,8 @@ function shiftData(date,nm){
   const day=getDay(date), t=shiftTotals(day,nm), byProd={};
   t.lines.forEach(l=>{ if(!l.qty)return;
     const b=byProd[l.noz.product]||(byProd[l.noz.product]={qty:0,amount:0,cost:0});
-    b.qty+=l.qty; b.amount+=l.amount; b.cost+=l.qty*(day.rates[l.noz.product]?.buy||0); });
+    /* l.buy is the frozen rate for a closed shift, the live one otherwise. */
+    b.qty+=l.qty; b.amount+=l.amount; b.cost+=l.qty*l.buy; });
   return {day,t,byProd};
 }
 function openShiftReport(date,nm){ S.report={date,shift:nm}; S.modal=vShiftReport; render(); }
@@ -1443,6 +1701,7 @@ function vShiftReport(){
       <div class="rs">${esc([S.config.brand,S.config.place].filter(Boolean).join(' · '))}</div>
       <div class="rb">Shift closing report</div>
       <div class="rs" style="margin-top:8px">${dmy(date)} · ${esc(nm)} shift · Operator ${esc(sh.operator||'—')}${sh.closedAt?' · closed '+esc(sh.closedAt):''}</div>
+      ${sh.closed&&sh.ratesAtClose?`<div class="rs" style="margin-top:4px;font-size:11px">Valued at the rates in force when this shift closed.</div>`:''}
     </div>
 
     <div class="rsec">Nozzle meter readings</div>
@@ -1450,7 +1709,7 @@ function vShiftReport(){
       <thead><tr><th>Nozzle</th><th>Product</th><th class="r">Opening</th><th class="r">Closing</th><th class="r">Test</th><th class="r">Sold L</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
       <tbody>${t.lines.filter(l=>l.qty||l.close).map(l=>`<tr>
         <td>${esc(l.noz.name)}</td><td>${esc(prod(l.noz.product).short)}</td>
-        <td class="r num">${nf(l.open,2)}</td><td class="r num">${nf(l.close,2)}</td><td class="r num">${l.test?nf(l.test,2):'—'}</td>
+        <td class="r num">${nf(l.open,2)}</td><td class="r num">${nf(l.close,2)}${l.rollover?' <span class="chip" title="Totalizer rolled over">+'+nf(l.rollover,0)+'</span>':''}</td><td class="r num">${l.test?nf(l.test,2):'—'}</td>
         <td class="r num">${nf(l.qty,2)}</td><td class="r num">${nf(l.rate,2)}</td><td class="r num">${money(l.amount)}</td></tr>`).join('')
         ||'<tr><td colspan="8" class="empty">No readings recorded.</td></tr>'}
         <tr class="totalrow"><td colspan="5">Total</td><td class="r num">${nf(t.qty,2)}</td><td></td><td class="r num">${money(t.fuel)}</td></tr>
@@ -1628,7 +1887,8 @@ async function pdfShift(date,nm){
   y+=20;
   y=pdfSec(d,y,'Nozzle meter readings');
   y=pdfTable(d,y,['Nozzle','Product','Opening','Closing','Test','Sold L','Rate','Amount'],
-    t.lines.filter(l=>l.qty||l.close).map(l=>[l.noz.name,prod(l.noz.product).short,nf(l.open,2),nf(l.close,2),l.test?nf(l.test,2):'-',nf(l.qty,2),nf(l.rate,2),R(l.amount)])
+    t.lines.filter(l=>l.qty||l.close).map(l=>[l.noz.name+(l.noz.archived?' (retired)':''),prod(l.noz.product).short,nf(l.open,2),
+      nf(l.close,2)+(l.rollover?' (+'+nf(l.rollover,0)+' rollover)':''),l.test?nf(l.test,2):'-',nf(l.qty,2),nf(l.rate,2),R(l.amount)])
       .concat([[{content:'TOTAL',colSpan:5,styles:{fontStyle:'bold'}},{content:nf(t.qty,2),styles:{fontStyle:'bold'}},'',{content:R(t.fuel),styles:{fontStyle:'bold'}}]]),
     {2:{halign:'right'},3:{halign:'right'},4:{halign:'right'},5:{halign:'right'},6:{halign:'right'},7:{halign:'right'}});
   if(Object.keys(byProd).length){
@@ -1665,7 +1925,7 @@ async function pdfDay(date){
 
   y=pdfSec(d,y,'Rates for the day');
   y=pdfTable(d,y,['Product','Selling Rs./L','Purchase Rs./L','Margin Rs./L'],
-    S.config.products.map(p=>[p.name,nf(day.rates[p.id]?.sell||0,2),nf(day.rates[p.id]?.buy||0,2),nf((day.rates[p.id]?.sell||0)-(day.rates[p.id]?.buy||0),2)]),
+    activeProducts().map(p=>[p.name,nf(day.rates[p.id]?.sell||0,2),nf(day.rates[p.id]?.buy||0,2),nf((day.rates[p.id]?.sell||0)-(day.rates[p.id]?.buy||0),2)]),
     {1:{halign:'right'},2:{halign:'right'},3:{halign:'right'}});
 
   /* readings, shift by shift */
@@ -1690,6 +1950,7 @@ async function pdfDay(date){
   y=pdfTable(d,y,['Shift','Operator','Cash','UPI','Card','Bank transfer','Credit','Short / excess'],
     (S.config.shifts||[]).filter(nm=>day.shifts[nm]).map(nm=>{const t=shiftTotals(day,nm);
       return [nm,t.sh.operator||'-',R(t.sh.cash),R(t.sh.upi),R(t.sh.card),R(t.sh.bank),R(t.credit),Math.abs(t.diff)<1?'In balance':R(t.diff)];})
+      .concat(T.stray?[['(shift cleared)','-','-','-','-','-',R(T.stray),'-']]:[])
       .concat([[{content:'TOTAL',colSpan:2,styles:{fontStyle:'bold'}},
         ...[T.cash,T.upi,T.card,T.bank,T.credit].map(v=>({content:R(v),styles:{fontStyle:'bold'}})),
         {content:Math.abs(T.diff)<1?'In balance':R(T.diff),styles:{fontStyle:'bold'}}]]),
@@ -1736,6 +1997,9 @@ async function pdfDay(date){
 
   const slips=[]; (S.config.shifts||[]).forEach(nm=>(day.shifts[nm]?.credit||[]).forEach(c=>
     slips.push([nm,cust(c.cust)?.name||'-',c.vehicle||'-',c.slip||'-',c.qty?nf(c.qty,2):'-',R(c.amount)])));
+  /* Slips whose shift was cleared still owe money; they belong on the sheet. */
+  (day.unassignedCredit||[]).forEach(c=>
+    slips.push(['(shift cleared)',cust(c.cust)?.name||'-',c.vehicle||'-',c.slip||'-',c.qty?nf(c.qty,2):'-',R(c.amount)]));
   if(slips.length){
     y=pdfSec(d,y,'Credit slips issued');
     y=pdfTable(d,y,['Shift','Customer','Vehicle','Slip no.','Litres','Amount'],slips,{4:{halign:'right'},5:{halign:'right'}});
@@ -1799,27 +2063,33 @@ function csv(filename,rows){
   download(new Blob(['\ufeff'+text],{type:'text/csv;charset=utf-8'}),filename);
 }
 function exportPL(){
-  const {from,to}=reportRange(); const rows=[['Profit & loss',S.config.station],['Period',from+' to '+to],[]];
+  const {from,to}=reportRange(); const rows=[['Profit & loss',S.config.station],['Period',from+' to '+to]];
+  /* Say it in the file as well as on screen: a reader of the CSV has no other
+     way to know the period was only partly read. */
+  const gap=missingDays(from,to);
+  if(gap.length)rows.push(['WARNING',gap.length+' day(s) in this period were not loaded; the figures below are incomplete.']);
+  rows.push([]);
   rows.push(['Product','Litres','Sales','Cost','Margin']);
   const dates=Object.keys(S.days).filter(d=>d>=from&&d<=to);
   const agg={},heads={}; let other=0,otherCost=0,exp=0;
   dates.forEach(d=>{const t=dayTotals(d);Object.entries(t.byProd).forEach(([p,b])=>{const x=agg[p]||(agg[p]={qty:0,amount:0,cost:0});x.qty+=b.qty;x.amount+=b.amount;x.cost+=b.cost;});
     other+=t.other;otherCost+=t.otherCost;exp+=t.expenses;
-    (S.days[d].expenses||[]).forEach(e=>heads[e.head]=(heads[e.head]||0)+num(e.amount));});
+    (S.days[d].expenses||[]).forEach(e=>addHead(heads,e.head,num(e.amount)));});
   let gm=0; Object.entries(agg).forEach(([p,b])=>{rows.push([prod(p).name,b.qty.toFixed(2),b.amount.toFixed(2),b.cost.toFixed(2),(b.amount-b.cost).toFixed(2)]);gm+=b.amount-b.cost;});
   rows.push([],['Lube & other sales','',other.toFixed(2),otherCost.toFixed(2),(other-otherCost).toFixed(2)]);
-  rows.push([],['Expenses','']); Object.entries(heads).forEach(([h,v])=>rows.push([h,v.toFixed(2)]));
+  rows.push([],['Expenses','']); headList(heads).forEach(h=>rows.push([h.label,h.amount.toFixed(2)]));
   rows.push(['Total expenses',exp.toFixed(2)],[],['Gross profit',(gm+other-otherCost).toFixed(2)],['Net profit',(gm+other-otherCost-exp).toFixed(2)]);
   csv('profit-loss-'+from+'-to-'+to+'.csv',rows);
 }
 function exportDayBook(){
   const {from,to}=reportRange();
-  const rows=[['Date','Shift','Nozzle','Product','Opening','Closing','Test','Litres','Rate','Amount']];
+  const rows=[['Date','Shift','Nozzle','Product','Opening','Closing','Test','Rollover','Litres','Rate','Amount']];
   Object.keys(S.days).filter(d=>d>=from&&d<=to).sort().forEach(d=>{
     const day=S.days[d];
     (S.config.shifts||[]).forEach(nm=>{ if(!day.shifts?.[nm])return;
       shiftTotals(day,nm).lines.forEach(l=>{ if(!l.close&&!l.qty)return;
-        rows.push([d,nm,l.noz.name,prod(l.noz.product).short,l.open,l.close,l.test,l.qty.toFixed(2),l.rate.toFixed(2),l.amount.toFixed(2)]);});});
+        rows.push([d,nm,l.noz.name+(l.noz.archived?' (retired)':''),prod(l.noz.product).short,
+          l.open,l.close,l.test,l.rollover,l.qty.toFixed(2),l.rate.toFixed(2),l.amount.toFixed(2)]);});});
   });
   csv('day-book-'+from+'-to-'+to+'.csv',rows);
 }
@@ -1833,4 +2103,9 @@ function exportCredit(){
 
 
 /* Handles for the test harness and for support sessions. */
-window.BunkSoft={ get S(){return S;}, repo, cashBook, dayTotals, shiftTotals, render, getDay };
+/* A small surface for the test suites and for support work in the console.
+   Nothing in the app reads from here. */
+window.BunkSoft={ get S(){return S;}, repo, get repoRole(){return repo.role;},
+  cashBook, dayTotals, shiftTotals, shiftLines, lastClose, strayCredit,
+  activeNozzles, activeProducts, nozzlesFor, ratesOf, missingDays,
+  render, getDay };

@@ -24,12 +24,24 @@ export function createFakeClient(T, state) {
   const me = () => state.user;
 
   /* ---- triggers, mirroring the ones in schema.sql ---- */
-  const sold = r => Math.max(0, (+r.closing_reading || 0) - (+r.opening_reading || 0) - (+r.test_litres || 0));
+  /* Matches reading_sold() and trg_reading_stock() in supabase/fixes.sql:
+     a totalizer wrap is carried as litres, not floored away. */
+  const sold = r => Math.max(0, (+r.closing_reading || 0) + (+r.rollover_add || 0)
+                              - (+r.opening_reading || 0) - (+r.test_litres || 0));
+  /* trg_reading_sane(): a reading that cannot be true is refused. */
+  const saneReading = r => {
+    const moved = (+r.closing_reading || 0) + (+r.rollover_add || 0) - (+r.opening_reading || 0);
+    if (moved < 0) throw new Error('Closing reading is below the opening reading. Correct it, or record a meter rollover.');
+    if ((+r.test_litres || 0) < 0) throw new Error('Test litres cannot be negative.');
+    if ((+r.test_litres || 0) > moved) throw new Error('Test litres (' + r.test_litres +
+      ') exceed the ' + moved + ' litres that passed this meter.');
+  };
   const bumpTank = (id, delta) => {
     const t = T.tanks.find(x => x.id === id);
     if (t) t.current_stock = Math.round((+t.current_stock + delta) * 100) / 100;
   };
 
+  const BEFORE_WRITE = { readings: saneReading };
   const AFTER_INSERT = {
     readings: r => bumpTank(r.tank_id, -sold(r)),
     fuel_receipts: r => {
@@ -114,7 +126,7 @@ export function createFakeClient(T, state) {
   }
 
   function builder(table) {
-    const q = { _f: [], _sel: '*', _order: [], _limit: null, _single: 0 };
+    const q = { _f: [], _sel: '*', _order: [], _limit: null, _single: 0, _range: null };
     const api = {
       select(sel) { q._sel = sel || '*'; return api; },
       eq(c, v) { q._f.push([c, '=', v]); return api; },
@@ -123,6 +135,8 @@ export function createFakeClient(T, state) {
       lte(c, v) { q._f.push([c, '<=', v]); return api; },
       order(c, o) { q._order.push([c, (o && o.ascending === false) ? -1 : 1]); return api; },
       limit(n) { q._limit = n; return api; },
+      /* PostgREST pages with Range; db.js walks a report period with it */
+      range(from, to) { q._range = [from, to]; return api; },
       single() { q._single = 1; return api; },
       maybeSingle() { q._single = 2; return api; },
       insert(rows) { q._op = 'insert'; q._rows = [].concat(rows); return api; },
@@ -146,6 +160,7 @@ export function createFakeClient(T, state) {
           q._order.forEach(([c, dir]) => data.sort((a, b) =>
             a[c] === b[c] ? 0 : (a[c] > b[c] ? dir : -dir)));
           if (q._limit) data = data.slice(0, q._limit);
+          if (q._range) data = data.slice(q._range[0], q._range[1] + 1);
           if (q._single) {
             if (!data.length && q._single === 1) throw new Error('no rows returned');
             data = data[0] || null;
@@ -160,9 +175,18 @@ export function createFakeClient(T, state) {
               const keys = q._conflict.split(',').map(s => s.trim());
               existing = T[table].find(r => keys.every(k => String(r[k]) === String(row[k])));
             }
-            if (existing) { Object.assign(existing, row); made.push(existing); }
+            if (BEFORE_WRITE[table]) BEFORE_WRITE[table](row);
+            if (existing) {
+              /* an upsert over a reading moves stock twice unless the old
+                 contribution is reversed first, as the real trigger does */
+              if (table === 'readings' && AFTER_DELETE.readings) AFTER_DELETE.readings(existing);
+              Object.assign(existing, row);
+              if (table === 'readings' && AFTER_INSERT.readings) AFTER_INSERT.readings(existing);
+              made.push(existing);
+            }
             else {
               row.id = row.id || uuid();
+              if (table === 'readings') row.rollover_add = row.rollover_add ?? 0;
               row.created_at = row.created_at || new Date().toISOString();
               /* column defaults, as the real schema declares them */
               if ('archived' in (T[table][0] || {}) || ['products','tanks','nozzles','credit_customers'].includes(table))
@@ -185,7 +209,15 @@ export function createFakeClient(T, state) {
           data = q._single ? made[0] : made;
         } else if (q._op === 'update') {
           const hit = rowsOf(table).filter(r => visible(table, r)).filter(match).filter(r => canWrite(table, r));
-          hit.forEach(r => Object.assign(r, q._patch));
+          hit.forEach(r => {
+            const next = { ...r, ...q._patch };
+            if (BEFORE_WRITE[table]) BEFORE_WRITE[table](next);
+            if (table === 'readings' && AFTER_DELETE.readings) AFTER_DELETE.readings(r);
+            Object.assign(r, q._patch);
+            if (table === 'readings' && AFTER_INSERT.readings) AFTER_INSERT.readings(r);
+            /* shifts carry an updated_at the app uses to spot a second saver */
+            if (table === 'shifts' && !('updated_at' in q._patch)) r.updated_at = new Date().toISOString();
+          });
           data = hit;
         } else if (q._op === 'delete') {
           const hit = rowsOf(table).filter(r => visible(table, r)).filter(match).filter(r => canWrite(table, r));
@@ -214,6 +246,38 @@ export function createFakeClient(T, state) {
        Fail the way Postgres does, so nothing in the app can quietly depend
        on a path that no longer exists in production. */
     create_bunk: () => { throw new Error('permission denied for function create_bunk'); },
+
+    /* ---- supabase/fixes.sql ---- */
+    /* The book figure is read on the server, so a stale browser cannot log the
+       wrong gain or loss. */
+    record_dip: ({ p_bunk, p_day, p_tank, p_dip }) => {
+      if (!T.memberships.some(m => m.bunk_id === p_bunk && m.user_id === me()))
+        throw new Error('You do not have permission to do that.');
+      if (p_dip == null || +p_dip < 0) throw new Error('Enter the measured quantity.');
+      const t = T.tanks.find(x => x.id === p_tank && x.bunk_id === p_bunk);
+      if (!t) throw new Error('No such tank.');
+      const book = +t.current_stock;
+      const row = { id: uuid(), bunk_id: p_bunk, day: p_day, tank_id: p_tank,
+        product_id: t.product_id, book_qty: book, dip_qty: +p_dip,
+        taken_at: new Date().toISOString() };
+      T.dip_readings.push(row);
+      t.current_stock = +p_dip;
+      return { id: row.id, book, dip: +p_dip, variation: +p_dip - book };
+    },
+    /* The closing each nozzle last carried before p_before, from the records. */
+    last_closings: ({ p_bunk, p_before }) => {
+      if (!T.memberships.some(m => m.bunk_id === p_bunk && m.user_id === me())) return [];
+      const best = {};
+      T.readings.filter(r => r.bunk_id === p_bunk).forEach(r => {
+        const sh = T.shifts.find(x => x.id === r.shift_id);
+        if (!sh || !(sh.day < p_before)) return;
+        const key = sh.day + '\u0000' + (sh.closed_at || '') + '\u0000' + (sh.updated_at || '');
+        const cur = best[r.nozzle_id];
+        if (!cur || key > cur.key) best[r.nozzle_id] = { key, closing: +r.closing_reading, day: sh.day };
+      });
+      return Object.entries(best).map(([nozzle_id, v]) =>
+        ({ nozzle_id, closing: v.closing, day: v.day }));
+    },
     add_member: ({ p_bunk, p_email, p_role }) => {
       const u = state.users.find(x => x.email.toLowerCase() === String(p_email).toLowerCase());
       if (!u) throw new Error('no BunkSoft account for ' + p_email);
