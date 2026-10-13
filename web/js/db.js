@@ -98,6 +98,46 @@ async function run(context, q) {
   return data;
 }
 
+/* --------------------------------------------------- the October migration --
+   supabase/fixes.sql adds readings.rollover_add, shifts.rates_at_close,
+   record_dip() and last_closings(). If someone deploys this build without
+   running it, every one of those is missing and a shift save fails outright
+   with "Could not find the 'rates_at_close' column of 'shifts' in the schema
+   cache" — the operator cannot work, and the message means nothing to them.
+
+   So we ask the database once, at startup, and keep working either way: the
+   new fields are simply left off until the migration is there. The app shows
+   the administrator what to run. Nothing silently produces a wrong figure —
+   the parts that depend on the migration are the parts that get switched off.
+
+   PostgREST caches the schema, so a column added a moment ago can still read
+   as missing. fixes.sql ends with `notify pgrst, 'reload schema'` for that
+   reason; anyone hitting it anyway can reload the page. */
+let MIGRATION = null;                 /* null = not asked yet */
+export function migrationReady() { return MIGRATION === true; }
+export function migrationChecked() { return MIGRATION !== null; }
+
+/* "column not found" from PostgREST, in either of the shapes it sends. */
+const missingColumn = e => {
+  const m = String((e && (e.message || e)) || '');
+  return /schema cache/i.test(m) || /column .* does not exist/i.test(m) || e?.code === 'PGRST204';
+};
+const missingFunction = e => {
+  const m = String((e && (e.message || e)) || '');
+  return /schema cache/i.test(m) || /function .* does not exist/i.test(m) || e?.code === 'PGRST202';
+};
+
+async function checkMigration() {
+  try {
+    const { error } = await sb.from('shifts').select('rates_at_close').limit(1);
+    MIGRATION = !error;
+    if (error) console.warn('[BunkSoft] supabase/fixes.sql has not been run on this database.', error.message);
+  } catch (e) {
+    MIGRATION = false;
+  }
+  return MIGRATION;
+}
+
 /* ------------------------------------------------------------- the bunk -- */
 export const repo = {
   bunkId: null,
@@ -105,6 +145,9 @@ export const repo = {
 
   setBunk(id, role) { this.bunkId = id; this.role = role || 'operator'; },
   canConfigure() { return this.role === 'owner' || this.role === 'manager'; },
+  /* Has supabase/fixes.sql been applied to this database? See checkMigration. */
+  migrationReady() { return MIGRATION === true; },
+  migrationChecked() { return MIGRATION !== null; },
 
   myBunks() { return run('my_bunks', sb.rpc('my_bunks')); },
 
@@ -149,6 +192,8 @@ export const repo = {
      from the entry forms and from Settings; only reads of the past use
      them. */
   async loadConfig() {
+    /* Asked once per session, before anything that depends on it. */
+    if (MIGRATION === null) await checkMigration();
     const [bunk, products, nozzles] = await Promise.all([
       run('bunk', sb.from('bunks').select('*').eq('id', this.bunkId).single()),
       run('products', sb.from('products').select('*').eq('bunk_id', this.bunkId).order('sort_order')),
@@ -175,10 +220,14 @@ export const repo = {
      app used to fall back to 0, and a shift saved that way booked the meter's
      whole lifetime total as one day's sale. */
   async lastClosings(date) {
-    const rows = await run('last_closings',
-      sb.rpc('last_closings', { p_bunk: this.bunkId, p_before: date }));
+    if (MIGRATION === false) return {};      /* fall back to days in memory */
+    const { data, error } = await sb.rpc('last_closings', { p_bunk: this.bunkId, p_before: date });
+    if (error) {
+      if (missingFunction(error)) { MIGRATION = false; return {}; }
+      fail('last_closings', error);
+    }
     const out = {};
-    (rows || []).forEach(r => { out[r.nozzle_id] = Number(r.closing); });
+    (data || []).forEach(r => { out[r.nozzle_id] = Number(r.closing); });
     return out;
   },
 
@@ -473,27 +522,46 @@ export const repo = {
     }, { onConflict: 'bunk_id,day' }));
   },
 
-  /* One shift and all of its nozzle readings, saved together. */
+  /* One shift and all of its nozzle readings, saved together.
+
+     Every write here is attempted with the migration's columns and, if the
+     database turns out not to have them, attempted again without. The shift
+     is saved either way: an operator at a forecourt must never lose a set of
+     readings because an administrator has not run a SQL file. */
   async saveShift(date, name, sh, nozzles, rates) {
-    const row = {
+    const baseRow = {
       bunk_id: this.bunkId, day: date, name,
       operator: sh.operator || null, closed: !!sh.closed,
       closed_at: sh.closed ? (sh.closedAtISO || new Date().toISOString()) : null,
       cash: sh.cash || 0, card: sh.card || 0, upi: sh.upi || 0, bank: sh.bank || 0,
       other_amount: sh.other?.amount || 0, other_cost: sh.other?.cost || 0,
-      other_note: sh.other?.note || null,
-      /* Frozen when the shift closes, so revising a rate afterwards cannot
-         restate a shift that has already been signed and handed over. */
-      rates_at_close: sh.closed ? (sh.ratesAtClose || rates || null) : null
+      other_note: sh.other?.note || null
     };
+    /* Frozen when the shift closes, so revising a rate afterwards cannot
+       restate a shift that has already been signed and handed over. */
+    const shiftRow = () => MIGRATION === false ? { ...baseRow }
+      : { ...baseRow, rates_at_close: sh.closed ? (sh.ratesAtClose || rates || null) : null };
+
+    /* Runs `attempt`, and if the only thing wrong was a column this database
+       does not have, remembers that and runs it once more without. */
+    const withFallback = async (label, attempt) => {
+      const first = await attempt();
+      if (!first.error) return first;
+      if (!missingColumn(first.error)) fail(label, first.error);
+      MIGRATION = false;
+      const second = await attempt();
+      if (second.error) fail(label, second.error);
+      return second;
+    };
+
     /* An upsert alone is last-write-wins: two phones on one shift and a set
        of readings disappears with nothing to say so. When we know the row we
        loaded, update THAT revision; 0 rows back means somebody saved in the
        meantime. */
     let shiftId;
     if (sh.id && sh.updatedAt) {
-      const hit = await run('updateShift', sb.from('shifts')
-        .update(row).eq('id', sh.id).eq('updated_at', sh.updatedAt).select('id'));
+      const { data: hit } = await withFallback('updateShift', () => sb.from('shifts')
+        .update(shiftRow()).eq('id', sh.id).eq('updated_at', sh.updatedAt).select('id'));
       if (!hit || !hit.length) {
         const e = new Error('Somebody else saved this shift while you were working on it. '
           + 'Reopen the shift to see their entries before saving yours.');
@@ -501,21 +569,22 @@ export const repo = {
       }
       shiftId = hit[0].id;
     } else {
-      const saved = await run('upsertShift', sb.from('shifts')
-        .upsert(row, { onConflict: 'bunk_id,day,name' }).select('id').single());
+      const { data: saved } = await withFallback('upsertShift', () => sb.from('shifts')
+        .upsert(shiftRow(), { onConflict: 'bunk_id,day,name' }).select('id').single());
       shiftId = saved.id;
     }
 
-    const rows = (nozzles || []).map(n => {
+    const readingRows = () => (nozzles || []).map(n => {
       const r = sh.readings[n.id] || { open: 0, close: 0, test: 0, rollover: 0 };
-      return {
+      const base = {
         bunk_id: this.bunkId, shift_id: shiftId, nozzle_id: n.id, tank_id: n.tank || null,
-        opening_reading: r.open || 0, closing_reading: r.close || 0, test_litres: r.test || 0,
-        rollover_add: r.rollover || 0
+        opening_reading: r.open || 0, closing_reading: r.close || 0, test_litres: r.test || 0
       };
+      return MIGRATION === false ? base : { ...base, rollover_add: r.rollover || 0 };
     });
-    if (rows.length) {
-      await run('upsertReadings', sb.from('readings').upsert(rows, { onConflict: 'shift_id,nozzle_id' }));
+    if ((nozzles || []).length) {
+      await withFallback('upsertReadings', () => sb.from('readings')
+        .upsert(readingRows(), { onConflict: 'shift_id,nozzle_id' }));
     }
     return shiftId;
   },
@@ -564,10 +633,27 @@ export const repo = {
      if another device had sold fuel since this page loaded, the gain or loss
      logged was wrong — and because a dip SETS stock, that error was then baked
      into the tank. Returns {id, book, dip, variation}. */
-  addDip(date, d) {
-    return run('addDip', sb.rpc('record_dip', {
-      p_bunk: this.bunkId, p_day: date, p_tank: d.tank, p_dip: d.dip
-    }));
+  async addDip(date, d) {
+    if (MIGRATION !== false) {
+      const { data, error } = await sb.rpc('record_dip', {
+        p_bunk: this.bunkId, p_day: date, p_tank: d.tank, p_dip: d.dip
+      });
+      if (!error) return data;
+      if (!missingFunction(error)) fail('addDip', error);
+      MIGRATION = false;
+    }
+    /* No record_dip() on this database. Read the tank first and write the dip
+       the old way — a hair less safe against a concurrent sale, but the dip
+       still gets recorded and the variation is still computed from a figure
+       read now rather than whenever the page last loaded. */
+    const tank = await run('dipTank', sb.from('tanks')
+      .select('current_stock, product_id').eq('id', d.tank).eq('bunk_id', this.bunkId).single());
+    const book = Number(tank.current_stock);
+    const made = await run('addDip', sb.from('dip_readings').insert({
+      bunk_id: this.bunkId, day: date, tank_id: d.tank, product_id: tank.product_id,
+      book_qty: book, dip_qty: d.dip
+    }).select('id').single());
+    return { id: made.id, book, dip: Number(d.dip), variation: Number(d.dip) - book };
   },
   deleteDip(id) { return run('deleteDip', sb.from('dip_readings').delete().eq('id', id)); },
 

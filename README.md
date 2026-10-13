@@ -434,12 +434,19 @@ an operator cannot delete a shift that has been closed.
 **Frontend** — `npm i playwright`, then:
 
 ```bash
-npm test             # a full day at a bunk: shift, stock, credit, cash, reports
-npm run test:domain  # one case per fault found in the October review
-npm run test:admin   # the console: create, suspend, reset, refuse
-npm run test:headers # the security headers and the CSP
-npm run test:all     # all four
+npm test                 # a full day at a bunk: shift, stock, credit, cash, reports
+npm run test:domain      # one case per fault found in the October review
+npm run test:nomigration # the app on a database where fixes.sql was never run
+npm run test:admin       # the console: create, suspend, reset, refuse
+npm run test:headers     # the security headers and the CSP
+npm run test:all         # all five
 ```
+
+`nomigration-e2e.mjs` runs the app against a database that never had
+`fixes.sql` applied — the situation that took the live site down on 13 October.
+It proves the shift still saves with the right money, the dip still records,
+and the owner is told which file to run, rather than being shown a PostgREST
+message about a schema cache.
 
 `domain-e2e.mjs` runs 32 checks against the real application: a wrapped meter,
 a mis-keyed closing, test litres beyond the meter movement, a shift closed
@@ -457,7 +464,8 @@ backend refuses each one too, which is what stops a patched page.
 
 ## QA checklist
 
-- [ ] Run all four SQL files — schema, admin, fixes, lock_signups — then bootstrap the first administrator
+- [ ] Run all four SQL files — schema, admin, **fixes**, lock_signups — then bootstrap the first administrator
+- [ ] Sign-in page: the card is centred and the Email and Password boxes are the same width as the Sign in button
 - [ ] `/admin/` refuses a wrong password, and refuses a bunk owner who signs in
 - [ ] The app's sign-in page offers no way to create an account
 - [ ] Add a business; the handover card shows username and password

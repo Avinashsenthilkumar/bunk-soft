@@ -203,3 +203,14 @@ begin
   loop execute format('revoke all on function %s from public, anon', r.sig); end loop;
 end $$;
 revoke execute on function public.trg_reading_sane() from public, anon, authenticated;
+
+-- ============================================================================
+--  7. Tell the API about the new columns
+--
+--  PostgREST serves Supabase's REST API from a cached copy of the schema. A
+--  column added a second ago is not in that cache, and the app sees
+--  "Could not find the 'rates_at_close' column of 'shifts' in the schema
+--  cache" until it refreshes. This asks it to refresh now, so the app works
+--  the moment this file finishes rather than several minutes later.
+-- ============================================================================
+notify pgrst, 'reload schema';

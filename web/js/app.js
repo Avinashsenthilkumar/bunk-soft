@@ -438,7 +438,7 @@ function render(){
     S.membersLoaded=true;
     repo.members().then(m=>{S.members=m;render();}).catch(()=>{});
   }
-  view.innerHTML=storageBanner()+fn();
+  view.innerHTML=migrationBanner()+storageBanner()+fn();
   if(S.modal)$('#layer').innerHTML=S.modal(); else $('#layer').innerHTML='';
   wireLive();
   /* phone: the nav is a horizontal strip — keep the active section in view */
@@ -455,6 +455,19 @@ function renderStatus(){
 function storageBanner(){
   if(repo.canConfigure())return '';
   return banner('<b>Operator access.</b> You can run shifts, stock, credit and expenses. Rates, tanks and nozzles are read-only.');
+}
+/* The database is missing supabase/fixes.sql. The app keeps working without
+   it, so say plainly what is switched off and what to run — the alternative
+   is a PostgREST message about a schema cache, which means nothing to anyone
+   standing at a forecourt. */
+function migrationBanner(){
+  if(!repo.migrationChecked||!repo.migrationChecked()||repo.migrationReady())return '';
+  return `<div class="banner warn"><b>This database is one update behind.</b>
+    Shifts, stock and credit all save normally, but meter rollover, the frozen
+    closing rates and the server-side dip reading are switched off until it is applied.
+    ${repo.canConfigure()
+      ? 'Ask your BunkSoft administrator to run <code>supabase/fixes.sql</code> in the Supabase SQL editor, then reload this page.'
+      : 'Tell the owner so they can have it applied.'}</div>`;
 }
 function renderRateBoard(){
   const d=getDay(S.date);

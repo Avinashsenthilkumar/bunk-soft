@@ -187,3 +187,65 @@ test/e2e.mjs                sets a rate for every product, since a shift can no
 README.md                   fixes.sql in the install order, the new suites
 package.json                version 1.1.0, test:domain
 ```
+
+---
+
+# 13 October — the deployment failure, and what changed because of it
+
+Version 1.1.1.
+
+The 1.1.0 web app went live before `supabase/fixes.sql` had been run on the
+database. Every shift save then failed with:
+
+> Could not find the 'rates_at_close' column of 'shifts' in the schema cache
+
+Three things were wrong with that, and all three are fixed.
+
+### 19. A missing migration stopped the forecourt
+
+The app assumed its columns existed. If they did not, saving a shift failed
+outright — an operator with a drawer full of cash and a sheet of meter
+readings could not record them, and the message told them nothing they could
+act on.
+
+The app now asks the database once at startup whether the migration is there,
+and works either way. Without it, the shift, the readings, the stock movement,
+the credit and the cash all save exactly as before; only the four things that
+genuinely need the new schema are switched off — meter rollover, the frozen
+closing rates, the server-side dip and the server-side opening reading. Every
+write is also attempted a second time without the new fields if the database
+rejects them mid-flight, so a stale PostgREST cache cannot lose a shift
+either.
+
+The owner sees a plain banner naming the file to run. The operator sees
+nothing broken.
+
+### 20. The API did not know about the new columns
+
+PostgREST serves Supabase's REST API from a cached copy of the schema, so a
+column added a moment ago is still missing as far as the app is concerned.
+`fixes.sql` now ends with `notify pgrst, 'reload schema'`, so the app works
+the moment the file finishes rather than several minutes later.
+
+### 21. Every field on the sign-in screen was unstyled
+
+The stylesheet listed `input[type=text]`, `number`, `date` and `tel` — and
+nothing else. `email`, `password`, `url` and a bare `<input>` all fell through
+to the browser's default narrow box, which is why the Email and Password
+boxes sat visibly short of the Sign in button beneath them. The rule now works
+by exclusion, naming only the few controls that must *not* be full width, so a
+type nobody thought of can never be missed again. Focus rings were added to
+match the admin console.
+
+The sign-in card is also centred in the window now rather than sitting at the
+top with a large empty area beneath it — using `margin:auto` on a flex child,
+which, unlike `align-items:center`, still scrolls properly when the card is
+taller than the window.
+
+### Proving it
+
+`npm run test:nomigration` — 16 checks against a database where `fixes.sql`
+was never run: the app opens, the banner names the file, the shift saves, the
+litres and the value are right, stock moves, the dip records against a freshly
+read book figure, and once the migration is applied the banner disappears and
+the full feature set returns.

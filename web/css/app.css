@@ -171,9 +171,18 @@ tr.totalrow:hover td{background:var(--sunk)}
 .pill.ok{background:var(--good-soft);color:var(--good)}
 .pill.no{background:var(--bad-soft);color:var(--bad)}
 .pill.wr{background:var(--warn-soft);color:var(--warn)}
-input[type=text],input[type=number],input[type=date],input[type=tel],select,textarea{
-  width:100%;border:1px solid var(--line-2);background:var(--panel);border-radius:var(--r-sm);padding:8px 10px;font-size:13px}
-input:focus,select:focus{border-color:var(--accent)}
+/* Everything that takes typing, by exclusion rather than by listing types.
+   This used to name text/number/date/tel only, which quietly left email,
+   password and url unstyled — so every field on the sign-in screen fell back
+   to the browser's default narrow box and sat visibly short of the button
+   beneath it. Excluding the few controls that must NOT be full width means a
+   type we have not thought of can never be missed again. */
+input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]):not([type=submit]):not([type=button]),
+select,textarea{
+  width:100%;border:1px solid var(--line-2);background:var(--panel);color:var(--ink);
+  border-radius:var(--r-sm);padding:8px 10px;font-size:13px;font-family:inherit}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);outline:none;
+  box-shadow:0 0 0 3px var(--accent-soft)}
 input[type=number],input.mono{font-family:var(--fm);font-variant-numeric:tabular-nums}
 input:disabled,input[readonly]{background:var(--sunk);color:var(--ink-3)}
 label.f{display:block;min-width:0}
@@ -209,6 +218,8 @@ label.f>span{display:block;font-size:11.5px;font-weight:700;color:var(--ink-2);m
 /* banner */
 .banner{margin-top:14px;border:1px solid var(--line-2);border-left:4px solid var(--accent);background:var(--panel);border-radius:var(--r-sm);padding:11px 14px;font-size:13px;color:var(--ink-2);display:flex;gap:10px;align-items:center;flex-wrap:wrap;box-shadow:var(--shadow)}
 .banner b{color:var(--ink);font-weight:700}
+.banner.warn{border-left-color:#E0A23C;background:var(--panel)}
+.banner code{font-family:var(--fm);font-size:12px;background:var(--sunk);padding:1.5px 6px;border-radius:4px;color:var(--ink)}
 
 /* modal */
 .scrim{position:fixed;inset:0;background:rgba(10,26,50,.55);z-index:60;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto;backdrop-filter:blur(2px)}
@@ -276,19 +287,26 @@ svg.donut{display:block;width:100%;max-width:230px;margin:2px auto 0}
    Sign-in, onboarding and the standalone page chrome
    ========================================================================== */
 html,body{min-height:100%}
-#gate{min-height:100vh;min-height:100dvh;display:block;background:
+/* The card is centred with `margin:auto` inside a flex column rather than
+   with `align-items:center`: when the content is taller than the window —
+   a small laptop, a phone in landscape, the keyboard open — `align-items`
+   overflows past the top edge and that part cannot be scrolled to, while
+   `margin:auto` collapses and the page simply scrolls. */
+#gate{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;background:
   radial-gradient(1100px 620px at 12% -10%, #1B4E97 0%, transparent 60%),
+  radial-gradient(760px 520px at 92% 108%, #10418A 0%, transparent 62%),
   linear-gradient(160deg,#0A2A5C 0%,#0d2f66 45%,#123C7D 100%);}
-.authwrap{max-width:430px;margin:0 auto;padding:44px 20px 40px;
-  padding-top:calc(44px + env(safe-area-inset-top,0px));
+.authwrap{width:100%;max-width:430px;margin:auto;padding:40px 20px;
+  padding-top:calc(40px + env(safe-area-inset-top,0px));
   padding-bottom:calc(40px + env(safe-area-inset-bottom,0px))}
-.authbrand{display:flex;gap:12px;align-items:center;margin-bottom:22px;color:#fff}
+.authbrand{display:flex;gap:12px;align-items:center;justify-content:center;margin-bottom:22px;color:#fff}
 .authbrand .brandmark{width:44px;height:44px;border-radius:12px}
 .authbrand .brandmark svg{width:26px;height:26px}
 .authbrand .blogo{font-family:var(--fd);font-size:25px;font-weight:700;line-height:1;letter-spacing:-.02em;color:#fff}
 .authbrand .blogo i{font-style:normal;color:#5FB0FF}
 .authbrand .btag{font-size:11.5px;color:#9FC0E8;margin-top:4px}
-.authcard{background:var(--panel);border-radius:16px;padding:26px 24px;box-shadow:0 24px 60px rgba(4,18,40,.42)}
+.authcard{background:var(--panel);border-radius:16px;padding:28px 26px;
+  box-shadow:0 24px 60px rgba(4,18,40,.42),0 2px 6px rgba(4,18,40,.3)}
 .authcard h1{font-family:var(--fd);font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--ink)}
 .authsub{margin:7px 0 18px;color:var(--ink-2);font-size:13.5px;line-height:1.5}
 .authcard .f{margin-bottom:13px}

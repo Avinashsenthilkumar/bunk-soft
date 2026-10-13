@@ -170,7 +170,13 @@ td:last-child{white-space:nowrap}
 .kv dd{margin:0;font-family:var(--fm);font-weight:600;word-break:break-all}
 
 /* ---------- sign-in ---------- */
-.authwrap{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;
+/* `safe center` so that when the card is taller than the window — a short
+   laptop, or a phone with the keyboard up — the top stays reachable instead
+   of being clipped above the scroll origin. Browsers that do not know the
+   keyword keep the plain `center` on the line before. */
+.authwrap{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;
+  justify-content:safe center;
   gap:16px;padding:32px 18px;max-width:430px;margin:0 auto}
 .authbrand{display:flex;align-items:center;gap:11px}
 .authbrand .amark{width:42px;height:42px;border-radius:11px}

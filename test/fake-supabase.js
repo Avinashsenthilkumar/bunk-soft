@@ -41,6 +41,22 @@ export function createFakeClient(T, state) {
     if (t) t.current_stock = Math.round((+t.current_stock + delta) * 100) / 100;
   };
 
+  /* Set sessionStorage.__nomigration to make this fake behave like a database
+     where supabase/fixes.sql was never run: the two columns and the two
+     functions it adds are absent, and PostgREST answers the way it really
+     does. The app is expected to keep working without them. */
+  const noMigration = () => { try { return !!sessionStorage.getItem('__nomigration'); } catch { return false; } };
+  const schemaCacheError = what => {
+    const e = new Error(`Could not find the '${what}' column of 'shifts' in the schema cache`);
+    e.code = 'PGRST204'; return e;
+  };
+  const MIGRATION_COLUMNS = { readings: 'rollover_add', shifts: 'rates_at_close' };
+  function refuseMigrationColumns(table, row) {
+    if (!noMigration()) return;
+    const col = MIGRATION_COLUMNS[table];
+    if (col && row && Object.prototype.hasOwnProperty.call(row, col)) throw schemaCacheError(col);
+  }
+
   const BEFORE_WRITE = { readings: saneReading };
   const AFTER_INSERT = {
     readings: r => bumpTank(r.tank_id, -sold(r)),
@@ -159,6 +175,8 @@ export function createFakeClient(T, state) {
             .map(r => embed(table, r, q._sel));
           q._order.forEach(([c, dir]) => data.sort((a, b) =>
             a[c] === b[c] ? 0 : (a[c] > b[c] ? dir : -dir)));
+          if (noMigration() && MIGRATION_COLUMNS[table] && q._sel.includes(MIGRATION_COLUMNS[table]))
+            throw schemaCacheError(MIGRATION_COLUMNS[table]);
           if (q._limit) data = data.slice(0, q._limit);
           if (q._range) data = data.slice(q._range[0], q._range[1] + 1);
           if (q._single) {
@@ -175,6 +193,7 @@ export function createFakeClient(T, state) {
               const keys = q._conflict.split(',').map(s => s.trim());
               existing = T[table].find(r => keys.every(k => String(r[k]) === String(row[k])));
             }
+            refuseMigrationColumns(table, row);
             if (BEFORE_WRITE[table]) BEFORE_WRITE[table](row);
             if (existing) {
               /* an upsert over a reading moves stock twice unless the old
@@ -209,6 +228,7 @@ export function createFakeClient(T, state) {
           data = q._single ? made[0] : made;
         } else if (q._op === 'update') {
           const hit = rowsOf(table).filter(r => visible(table, r)).filter(match).filter(r => canWrite(table, r));
+          refuseMigrationColumns(table, q._patch);
           hit.forEach(r => {
             const next = { ...r, ...q._patch };
             if (BEFORE_WRITE[table]) BEFORE_WRITE[table](next);
@@ -251,6 +271,8 @@ export function createFakeClient(T, state) {
     /* The book figure is read on the server, so a stale browser cannot log the
        wrong gain or loss. */
     record_dip: ({ p_bunk, p_day, p_tank, p_dip }) => {
+      if (noMigration()) { const e = new Error(
+        'Could not find the function public.record_dip in the schema cache'); e.code = 'PGRST202'; throw e; }
       if (!T.memberships.some(m => m.bunk_id === p_bunk && m.user_id === me()))
         throw new Error('You do not have permission to do that.');
       if (p_dip == null || +p_dip < 0) throw new Error('Enter the measured quantity.');
@@ -266,6 +288,8 @@ export function createFakeClient(T, state) {
     },
     /* The closing each nozzle last carried before p_before, from the records. */
     last_closings: ({ p_bunk, p_before }) => {
+      if (noMigration()) { const e = new Error(
+        'Could not find the function public.last_closings in the schema cache'); e.code = 'PGRST202'; throw e; }
       if (!T.memberships.some(m => m.bunk_id === p_bunk && m.user_id === me())) return [];
       const best = {};
       T.readings.filter(r => r.bunk_id === p_bunk).forEach(r => {
