@@ -877,8 +877,10 @@ function vStock(){
           <button class="btn" data-act="adddip">Record dip</button>
         </div>
         <div class="setupnote">Recording a dip sets book stock to the measured quantity and logs the difference as gain or loss.
-          Removing a dip from this list deletes the record but does not rewind the stock — a measurement cannot be un-taken.
-          To correct a wrong dip, record another one with the right figure.</div>
+          <b>Deleting one means it was entered by mistake</b>, so the stock goes back to where it stood before it —
+          keeping any sales and decantation since. If you measured again and got a different figure, do not delete:
+          record another dip, and the newer one decides the stock. Deleting an older dip that a newer one has already
+          overwritten changes nothing.</div>
         <div class="tw" style="margin-top:12px"><table>
           <thead><tr><th>Tank</th><th class="r">Book</th><th class="r">Dip</th><th class="r">Variation</th><th class="r">Valued</th><th></th></tr></thead>
           <tbody>${(day.dips||[]).map(d=>{const v=num(d.dip)-num(d.book);return `<tr>
