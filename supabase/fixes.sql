@@ -171,15 +171,20 @@ $$;
 --  them. Any member could do that to a shift already closed, signed and
 --  handed over. An open shift stays anyone's to clear.
 -- ============================================================================
+-- Each policy below is dropped before it is created, so this file can be run
+-- again without failing on "policy already exists".
 drop policy if exists shifts_write on public.shifts;
 
+drop policy if exists shifts_insert on public.shifts;
 create policy shifts_insert on public.shifts
   for insert with check (public.is_bunk_member(bunk_id));
 
+drop policy if exists shifts_update on public.shifts;
 create policy shifts_update on public.shifts
   for update using (public.is_bunk_member(bunk_id))
          with check (public.is_bunk_member(bunk_id));
 
+drop policy if exists shifts_delete on public.shifts;
 create policy shifts_delete on public.shifts
   for delete using (
     public.is_bunk_member(bunk_id)

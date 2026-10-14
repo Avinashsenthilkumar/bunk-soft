@@ -1,3 +1,16 @@
+-- ############################################################################
+-- #  RUN ORDER MATTERS                                                       #
+-- #                                                                          #
+-- #    schema.sql  ->  admin.sql  ->  fixes.sql  ->  lock_signups.sql        #
+-- #                                                                          #
+-- #  If you re-run THIS file on a database that already has the others, you  #
+-- #  MUST re-run admin.sql and fixes.sql after it. This file ends with       #
+-- #  `grant execute on all functions ... to authenticated`, which hands back  #
+-- #  create_bunk() — the function admin.sql revokes so that nobody can make   #
+-- #  their own bunk outside the administration console. It fails silently.    #
+-- #                                                                          #
+-- #  Every file here is safe to run again, in that order.                     #
+-- ############################################################################
 -- ============================================================================
 --  BunkSoft — Petrol Bunk Management
 --  Subsel Tech Solutions Pvt Ltd
@@ -431,6 +444,9 @@ begin
 end $$;
 
 -- The bunks a user belongs to, with their role — one call on sign-in.
+-- Dropped first so this file can be run again after admin.sql, which widens
+-- this function's return type with a `disabled` flag.
+drop function if exists public.my_bunks();
 create or replace function public.my_bunks()
 returns table (id uuid, name text, brand text, place text, role public.member_role)
 language sql stable security definer set search_path = public as $$

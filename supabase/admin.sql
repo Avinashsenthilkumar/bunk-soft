@@ -418,6 +418,9 @@ end $$;
 --  Usage, not money. An administrator can see that a bunk is active and how
 --  heavily it is used, and cannot read a single rupee of its trade.
 -- ============================================================================
+-- Dropped first so this file can be run again: a later section widens this
+-- function's return type, and `create or replace` cannot narrow it back.
+drop function if exists public.admin_businesses();
 create or replace function public.admin_businesses()
 returns table (
   bunk_id uuid, name text, brand text, place text, created_at timestamptz,
@@ -733,10 +736,12 @@ drop policy if exists profiles_write on public.profiles;
 
 -- Read: yourself, and anyone on a bunk you belong to. Nothing wider — a name
 -- and a phone number are not public just because two people use the software.
+drop policy if exists profiles_read on public.profiles;
 create policy profiles_read on public.profiles
   for select using (id = auth.uid() or public.shares_bunk_with(id));
 
 -- Write: only ever your own row.
+drop policy if exists profiles_write on public.profiles;
 create policy profiles_write on public.profiles
   for all using (id = auth.uid()) with check (id = auth.uid());
 
@@ -752,16 +757,19 @@ returns boolean language sql stable security definer set search_path = public, p
           and target_role <> 'owner');
 $$;
 
+drop policy if exists memberships_insert on public.memberships;
 create policy memberships_insert on public.memberships
   for insert with check (public.can_manage_membership(bunk_id, role));
 
 -- Both sides are checked: `using` is the row as it stands, `with check` the
 -- row as it would become. A manager can therefore neither edit an owner's row
 -- nor promote anyone into one.
+drop policy if exists memberships_update on public.memberships;
 create policy memberships_update on public.memberships
   for update using (public.can_manage_membership(bunk_id, role))
          with check (public.can_manage_membership(bunk_id, role));
 
+drop policy if exists memberships_delete on public.memberships;
 create policy memberships_delete on public.memberships
   for delete using (public.can_manage_membership(bunk_id, role));
 
