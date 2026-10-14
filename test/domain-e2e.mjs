@@ -381,6 +381,76 @@ ok('an owner may still clear one', !!(await p.$('[data-act="clearshift"]'))||tru
    'role '+JSON.stringify(clearable));
 console.log('      (the refusal for an operator is proved in supabase/test_rls.sql)');
 
+/* ====================================================================== 19 */
+console.log('\n19. A credit slip is not money received');
+await setDate(D0); await p.waitForTimeout(500);
+await p.click('[data-tab="shift"]'); await p.waitForTimeout(500);
+const meter = await p.evaluate(()=>({
+  labels:[...document.querySelectorAll('.meter .m b')].map(b=>b.textContent.trim()),
+  collected:document.querySelector('#mRecv')?.textContent,
+  credit:document.querySelector('#mCredit')?.textContent,
+  accounted:document.querySelector('#mAcct')?.textContent
+}));
+ok('the meter says Collected, not Received', meter.labels.includes('Collected'), meter.labels.join(', '));
+ok('and shows credit and accounted separately',
+   meter.labels.includes('Credit') && meter.labels.includes('Accounted'), meter.labels.join(', '));
+const money19 = await p.evaluate(()=>{
+  const d=window.BunkSoft.S.days[window.BunkSoft.S.date];
+  const nm=window.BunkSoft.S.shift;
+  d.shifts[nm]=d.shifts[nm]||{operator:'',readings:{},cash:0,card:0,upi:0,bank:0,credit:[],other:{amount:0,cost:0,note:''},closed:false};
+  const sh=d.shifts[nm];
+  sh.cash=1000; sh.card=0; sh.upi=0; sh.bank=0;
+  sh.credit=[{id:'z1',cust:'c',amount:3715,qty:0}];
+  const t=window.BunkSoft.shiftTotals(d,nm);
+  return {collected:t.collected, credit:t.credit, accounted:t.accounted, recv:t.recv};
+});
+ok('collected counts only the ₹1,000 that came in ('+money19.collected+')', money19.collected===1000);
+ok('the ₹3,715 slip is credit, not collected ('+money19.credit+')', money19.credit===3715);
+ok('accounted is the two added together ('+money19.accounted+')', money19.accounted===4715);
+ok('recv no longer silently includes credit ('+money19.recv+')', money19.recv===1000);
+
+/* ====================================================================== 20 */
+console.log('\n20. Settings no longer offers the Team panel');
+await p.click('[data-tab="setup"]'); await p.waitForTimeout(800);
+const setupTxt = await p.textContent('#view');
+ok('the Team panel is hidden', !/who can open this bunk/i.test(setupTxt));
+ok('and its Give access button is gone', !(await p.$('[data-act="addmember"]')));
+ok('the rest of Settings still renders', /Products/i.test(setupTxt) && /Tanks/i.test(setupTxt));
+
+/* ====================================================================== 21 */
+console.log('\n21. Revise rates and the Settings product rates agree');
+await setRates(123.45, 111.11);
+await p.click('[data-tab="setup"]'); await p.waitForTimeout(800);
+const standing = await p.evaluate(()=>{
+  const tr=document.querySelector('#view tr[data-pid]');
+  return {sell:tr.querySelector('[data-pf="sell"]').value, buy:tr.querySelector('[data-pf="buy"]').value};
+});
+ok('Settings shows what was just revised ('+standing.sell+' / '+standing.buy+')',
+   near(standing.sell,123.45,0.001) && near(standing.buy,111.11,0.001));
+const inState = await p.evaluate(()=>{
+  const p0=window.BunkSoft.S.config.products[0];
+  const dr=window.BunkSoft.getDay(window.BunkSoft.S.date).rates[p0.id];
+  return {standing:p0.sell, today:dr.sell};
+});
+ok('the standing rate and today agree ('+inState.standing+' vs '+inState.today+')',
+   near(inState.standing, inState.today, 0.001));
+ok('the Today column reports no mismatch', !/⚠/.test(await p.textContent('#view')));
+
+/* editing the standing rate on today should carry today with it */
+await p.evaluate(()=>{
+  const tr=document.querySelector('#view tr[data-pid]');
+  const el=tr.querySelector('[data-pf="sell"]'); el.value='130.00';
+  el.dispatchEvent(new Event('input',{bubbles:true}));
+});
+await p.click('[data-act="saveprods"]'); await p.waitForTimeout(1400);
+const after21 = await p.evaluate(()=>{
+  const p0=window.BunkSoft.S.config.products[0];
+  const dr=window.BunkSoft.getDay(window.BunkSoft.S.date).rates[p0.id];
+  return {standing:p0.sell, today:dr.sell};
+});
+ok('editing it in Settings moved today too ('+after21.standing+' / '+after21.today+')',
+   near(after21.standing,130,0.001) && near(after21.today,130,0.001));
+
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();
 console.log('\n'+pass+' passed, '+fail+' failed');

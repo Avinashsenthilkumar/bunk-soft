@@ -249,3 +249,112 @@ was never run: the app opens, the banner names the file, the shift saves, the
 litres and the value are right, stock moves, the dip records against a freshly
 read book figure, and once the migration is applied the banner disappears and
 the full feature set returns.
+
+---
+
+# 14 October — three reported issues
+
+Version 1.2.0. No database change; web files only.
+
+### 22. A credit slip was counted as money received
+
+The shift meter had one figure labelled **Received**, and it was
+`cash + card + UPI + bank + credit`. Issue a ₹3,715 credit slip against an
+empty drawer and the screen reported ₹3,715 received, when nothing had come
+in. The number was right for the short/excess calculation — fuel sold on
+credit is part of the amount due, so it has to be matched by the slips or
+every credit sale would look like a shortage — but it was being shown under a
+label that said something else entirely.
+
+They are now two figures:
+
+- **Collected** — cash, card, UPI, bank transfer. Money.
+- **Credit** — the slips.
+- **Accounted** — the two added together, which is what the amount due is
+  compared against.
+
+The shift report, the WhatsApp summary and the shift PDF all read the same
+way: *Collected in money*, then the slips, then *Total accounted*. The PDF's
+"Collected" card also used to leave bank transfer out of its total; it does
+not now.
+
+### 23. Settings → Team is hidden
+
+Hidden at the customer's request until the invite flow is settled. One
+constant controls it — `SHOW_TEAM` at the top of `web/js/app.js`. Setting it
+to `true` brings the panel and its two actions straight back; nothing else
+needs changing, and the membership API underneath is untouched. Staff are put
+on a bunk from the administration console in the meantime.
+
+The API is still exercised by the test suites while the panel is hidden, so
+turning it back on cannot find it quietly broken.
+
+### 24. The two rate screens disagreed
+
+**Revise rates** writes the rate for one date, into `business_days.rates`.
+**Settings → Products** holds the standing rate on the product row — what a
+new day starts from, and what values the stock. Revising a rate never touched
+the standing one, so the two drifted apart: Settings kept showing a figure
+nobody had used for weeks, the stock valuation used that stale figure while
+the P&L used the day's, and every new day opened on the old rate.
+
+Revising rates for today or any later date now moves the standing rate with
+it, because that is the owner saying what the rate *is*. Back-dating a
+correction to an earlier day still changes that day alone. Editing the
+standing rate in Settings while standing on today does the reverse — today
+moves too.
+
+Settings also gained a **Today** column showing what the open date is actually
+set to, with a warning mark when it differs from the standing rate, so the two
+can never silently disagree again.
+
+### Proving it
+
+Three new cases in `npm run test:domain` (45 checks now): a credit slip is not
+collected money, Settings does not offer the Team panel, and the two rate
+screens agree in both directions.
+
+---
+
+# 14 October, later — the blank page
+
+Version 1.2.1. Web and hosting config only; no database change.
+
+A refresh of the live site showed nothing but the blue background. Two
+fallbacks had lined up, and each one is a defect on its own.
+
+### 25. The host answered a missing asset with the HTML shell
+
+`vercel.json`, `netlify.toml` and `deploy/nginx.conf` all ended with a
+catch-all that sends any unmatched path to `index.html` — the normal
+arrangement for a single-page app. But it applied to `/js/app.js` too. When
+that file was missing from a deployment, the browser asked for a JavaScript
+module and was handed a page of HTML with a perfectly valid `200 OK`. It threw
+`Unexpected token '<'`, nothing rendered, and the page gave no clue at all —
+no error on screen, and a 200 in the network tab.
+
+All three configs now exclude `/js/`, `/css/`, `/icons/`, `sw.js` and the
+manifest from the catch-all. A missing asset 404s honestly and the console
+names the file.
+
+### 26. The service worker did the same thing, and cached the result
+
+On a network failure the worker returned `index.html` for *any* request it
+could not satisfy, scripts included — the same blank page, but reached from
+the other direction. Worse, because the host's rewrite returned a valid 200,
+the worker happily cached that HTML against the `/js/app.js` key. From then on
+the app stayed blank even after the real file was deployed, until the cache
+name changed.
+
+Now: the shell stands in only for a navigation; anything else gets an honest
+`504`. And HTML is never cached against a `.js`, `.mjs`, `.css`, `.json` or
+`.webmanifest` url, whatever status it arrives with. The cache name is bumped
+to `bunksoft-v6` to clear any entry an earlier build poisoned.
+
+### Proving it
+
+`npm run test:sw` — 8 checks driving the real `web/sw.js` in a stubbed worker
+scope: a host that rewrites a missing asset to the shell is passed through but
+not cached; a genuine module still is; an offline script request gets a 504
+rather than HTML; an offline page still gets the shell; a cached module is
+still served; and the admin console is never intercepted.

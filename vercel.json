@@ -36,6 +36,10 @@
   "rewrites": [
     { "source": "/admin", "destination": "/admin/index.html" },
     { "source": "/admin/(.*)", "destination": "/admin/index.html" },
-    { "source": "/((?!admin).*)", "destination": "/index.html" }
+    {
+      "//": "A real file always wins. This catch-all is only for routes. It must NOT swallow /js/, /css/, /icons/, the service worker or the manifest: when one of those is missing from a deployment, returning index.html hands the browser HTML where it asked for JavaScript, which throws \"Unexpected token '<'\" and leaves a blank page that no refresh clears. Excluded, a missing asset 404s honestly and the console says which file.",
+      "source": "/((?!admin|js/|css/|icons/|sw\\.js|manifest\\.webmanifest|robots\\.txt).*)",
+      "destination": "/index.html"
+    }
   ]
 }

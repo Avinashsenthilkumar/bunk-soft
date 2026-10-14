@@ -153,18 +153,25 @@ await p.click('[data-tab="report"]'); await p.waitForTimeout(700);
 ok('P&L rendered', (await p.textContent('#view')).includes('Profit'));
 await p.screenshot({path:'/tmp/bunksoft-app.png', fullPage:false});
 
-console.log('7. Operator cannot change setup');
-await p.evaluate(async ()=>{
+/* Settings -> Team is hidden for now (SHOW_TEAM in app.js), so staff are put
+   on a bunk from the administration console. The membership API underneath is
+   untouched, and is exercised here so that turning the panel back on later
+   cannot find it broken. */
+console.log('7. Staff are added from the console while the Team panel is hidden');
+const granted = await p.evaluate(async ()=>{
   const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
   const sb = createClient('https://demo.supabase.co','x'.repeat(60),{auth:{storageKey:'setup2'}});
   await sb.auth.signInWithPassword({email:'admin@subsel.in',password:'Subsel2026Admin'});
   await sb.rpc('admin_create_login',{p_email:'op@subsel.com',p_password:'Operator2026x',
     p_full_name:'Muthu S'});
+  const r = await window.BunkSoft.repo.members().catch(e=>({error:e.message}));
+  return Array.isArray(r) ? r.length : r;
 });
+ok('the membership API still answers', typeof granted === 'number', JSON.stringify(granted));
 await p.click('[data-tab="setup"]'); await p.waitForTimeout(600);
-await p.fill('#mb_email','op@subsel.com'); await p.selectOption('#mb_role','operator');
-await p.click('[data-act="addmember"]'); await p.waitForTimeout(900);
-ok('operator added to the team', (await p.textContent('#view')).includes('Muthu'));
+const setup = await p.textContent('#view');
+ok('the Team panel is not offered', !/who can open this bunk/i.test(setup));
+ok('Settings still renders its other panels', /Products/i.test(setup) && /Nozzles/i.test(setup));
 
 await b.close(); server.close();
 console.log(errs.length?'\nPAGE ERRORS:\n'+errs.slice(0,6).join('\n'):'\nno page errors');

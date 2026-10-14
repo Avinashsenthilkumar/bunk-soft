@@ -69,6 +69,25 @@
   status = 200
 
 # Everything else falls back to the application shell.
+# A missing asset must 404, not come back as index.html. Serving the HTML shell
+# where the browser asked for JavaScript throws "Unexpected token '<'" and
+# leaves a blank page that no refresh clears. These three rules come first, so
+# the catch-all below can never swallow them.
+[[redirects]]
+  from = "/js/*"
+  to = "/js/:splat"
+  status = 404
+
+[[redirects]]
+  from = "/css/*"
+  to = "/css/:splat"
+  status = 404
+
+[[redirects]]
+  from = "/icons/*"
+  to = "/icons/:splat"
+  status = 404
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -333,16 +333,22 @@ ok('Settings is read-only for them',
 console.log('\n11. The owner sees their team by name');
 /* Settings -> Team used to sit on "Loading the team..." forever: the profiles
    policy let you read only your own row, and the query embedded profiles
-   across a foreign key that does not exist. Both are fixed; this keeps them
-   fixed. */
+   across a foreign key that does not exist. Both are fixed, and this keeps
+   them fixed — through the API rather than the panel, which is hidden for now
+   (SHOW_TEAM in app.js). When the panel comes back it must find this working. */
 await appSignIn('balaji@example.com', genPass);
 await page.click('[data-tab="setup"]'); await wait(1200);
 {
   const team = await page.textContent('#view');
-  ok('the team panel is rendered for an owner', /Team/.test(team));
+  const members = await page.evaluate(async ()=>{
+    try { return await window.BunkSoft.repo.members(); }
+    catch (e) { return { error: e.message }; }
+  });
+  const names = Array.isArray(members) ? members.map(m=>m.name).join(', ') : JSON.stringify(members);
+  ok('the Team panel is hidden for now', !/who can open this bunk/.test(team));
   ok('it is no longer stuck on "Loading the team"', !/Loading the team/.test(team));
-  ok('the owner sees their own name', /R Balaji/.test(team));
-  ok("the owner sees the operator's name, not a dash", /M Raja/.test(team));
+  ok('the owner sees their own name through the API', /R Balaji/.test(names), names);
+  ok("the owner sees the operator's name, not a dash", /M Raja/.test(names), names);
   ok('book stock is shown but not editable in Settings',
     !(await page.$('#view input[data-tf="stock"]')));
 }
