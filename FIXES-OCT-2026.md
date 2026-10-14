@@ -358,3 +358,20 @@ scope: a host that rewrites a missing asset to the shell is passed through but
 not cached; a genuine module still is; an offline script request gets a 504
 rather than HTML; an offline page still gets the shell; a cached module is
 still served; and the admin console is never intercepted.
+
+### 27. A comment in vercel.json failed the deployment
+
+The exclusion added for #25 carried a `"//"` key holding the explanation.
+Vercel validates every rewrite entry against a strict schema and rejects any
+property it does not know, so the build failed and production went red. JSON
+has no comments; the reasoning lives in this file instead.
+
+The pattern was also simplified to directories alone —
+`/((?!admin|js/|css/|icons/).*)` — so there are no backslash escapes for
+path-to-regexp to trip on.
+
+`npm run test:sw` now also validates `vercel.json`: that it parses, that no
+entry carries a key Vercel would reject, that there is no unknown top-level
+key, and that the catch-all does not match `/js/`, `/css/` or `/icons/` paths
+while still matching an ordinary route. That check fails on exactly the
+mistake that broke this deployment.

@@ -130,5 +130,46 @@ console.log('\n6. The admin console is never touched');
   ok('the worker does not intercept it at all', r === 'PASSTHROUGH', String(r));
 }
 
+/* ------------------------------------------------------------------------ */
+/* The hosting configs decide whether a missing asset 404s or comes back as
+   HTML, and a malformed vercel.json fails the deployment outright — which is
+   how an unknown "//" comment key once took the build down. Both are checked
+   here because both are delivery, same as the worker above. */
+console.log('\n7. vercel.json is valid and does not swallow assets');
+{
+  const raw = fs.readFileSync('vercel.json', 'utf8');
+  let cfg = null, parsed = true;
+  try { cfg = JSON.parse(raw); } catch { parsed = false; }
+  ok('it is valid JSON', parsed);
+
+  /* Vercel validates each entry strictly; anything else fails the build. */
+  const ALLOWED = { rewrites: ['source','destination','has','missing'],
+                    redirects: ['source','destination','permanent','statusCode','has','missing'],
+                    headers: ['source','headers','has','missing'] };
+  const strays = [];
+  for (const [key, allowed] of Object.entries(ALLOWED))
+    for (const entry of (cfg?.[key] || []))
+      for (const k of Object.keys(entry))
+        if (!allowed.includes(k)) strays.push(key + '.' + k);
+  ok('no entry carries a key Vercel would reject', strays.length === 0, strays.join(', '));
+
+  const TOP = ['$schema','outputDirectory','cleanUrls','trailingSlash','headers','rewrites',
+               'redirects','buildCommand','framework','installCommand','regions','functions',
+               'public','github','ignoreCommand','devCommand','crons','images','rootDirectory'];
+  const badTop = Object.keys(cfg || {}).filter(k => !TOP.includes(k));
+  ok('no unknown top-level key', badTop.length === 0, badTop.join(', '));
+
+  /* The catch-all must not answer an asset path. */
+  const fallback = (cfg?.rewrites || []).find(r => r.destination === '/index.html'
+    && !String(r.source).includes('admin/'));
+  ok('a catch-all to the shell exists', !!fallback);
+  if (fallback) {
+    const re = new RegExp('^' + String(fallback.source).slice(1) + '$');
+    for (const asset of ['js/app.js','js/db.js','css/app.css','icons/icon.svg'])
+      ok('/' + asset + ' is not rewritten to the shell', !re.test(asset));
+    ok('an ordinary route still is', re.test('some/deep/route'));
+  }
+}
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exitCode = fail ? 1 : 0;
