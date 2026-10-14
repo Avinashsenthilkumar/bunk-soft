@@ -345,15 +345,24 @@ ok('a later revision does not restate it ('+valueAtClose+' → '+valueAfter+')',
    near(valueAtClose,valueAfter,0.5));
 
 /* ====================================================================== 16 */
-console.log('\n16. A receipt larger than the tank is questioned');
+console.log('\n16. A tank cannot be filled past its capacity');
 await p.click('[data-tab="stock"]'); await p.waitForTimeout(500);
 await p.selectOption('#rc_tank',{index:0});
-await answer(false);
+await answer(true);                    /* even an OK must not get it through */
 const recBefore = await p.evaluate(()=>(window.BunkSoft.S.days[window.BunkSoft.S.date].receipts||[]).length);
 await p.fill('#rc_qty','900000'); await p.fill('#rc_rate','90');
 await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(800);
 const recAfter = await p.evaluate(()=>(window.BunkSoft.S.days[window.BunkSoft.S.date].receipts||[]).length);
-ok('declining writes nothing', recBefore===recAfter, recBefore+' → '+recAfter);
+ok('it is refused outright, not merely questioned', recBefore===recAfter, recBefore+' → '+recAfter);
+ok('and the message says how much will fit', /will fit/i.test(await toastText()), await toastText());
+/* a quantity that does fit still goes in */
+const room = await p.evaluate(()=>{const t=window.BunkSoft.S.tanks[0];return Number(t.capacity)-Number(t.stock);});
+if (room > 10) {
+  await p.fill('#rc_qty',String(Math.floor(room/2))); await p.fill('#rc_rate','90');
+  await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(1000);
+  const recOk = await p.evaluate(()=>(window.BunkSoft.S.days[window.BunkSoft.S.date].receipts||[]).length);
+  ok('a load that fits is still accepted', recOk > recAfter, recAfter+' → '+recOk);
+}
 
 /* ====================================================================== 17 */
 console.log('\n17. A receipt over the outstanding is questioned');
@@ -450,6 +459,67 @@ const after21 = await p.evaluate(()=>{
 });
 ok('editing it in Settings moved today too ('+after21.standing+' / '+after21.today+')',
    near(after21.standing,130,0.001) && near(after21.today,130,0.001));
+
+/* ====================================================================== 22 */
+console.log('\n22. The opening meter reading cannot be typed over');
+await setDate(D0); await p.waitForTimeout(500);
+await p.click('[data-tab="shift"]'); await p.waitForTimeout(600);
+const openField = await p.evaluate(()=>{
+  const el=document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]');
+  return {readonly:!!el?.readOnly, close:!!document.querySelector('input[data-fld="close"]')?.readOnly};
+});
+ok('opening is read-only', openField.readonly===true);
+ok('closing is still editable', openField.close===false);
+/* typing into it must not change what gets saved */
+const before22 = await p.evaluate(()=>{
+  const el=document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]');
+  return el.value;
+});
+await p.evaluate(()=>{
+  const el=document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]');
+  el.focus(); el.value='999999'; el.dispatchEvent(new Event('input',{bubbles:true}));
+});
+await p.click('[data-tab="dash"]'); await p.waitForTimeout(400);
+await p.click('[data-tab="shift"]'); await p.waitForTimeout(600);
+const after22 = await p.evaluate(()=>
+  document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]').value);
+ok('a scripted change does not survive a re-render ('+before22+' → '+after22+')', after22===before22);
+ok('an owner is offered a deliberate unlock', !!(await p.$('[data-act="unlockopen"]')));
+await answer(true);
+await p.click('[data-act="unlockopen"]'); await p.waitForTimeout(500);
+ok('unlocking makes it editable', (await p.evaluate(()=>
+  document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]').readOnly))===false);
+await p.click('[data-act="unlockopen"]'); await p.waitForTimeout(500);
+ok('and it locks again', (await p.evaluate(()=>
+  document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]').readOnly))===true);
+
+/* ====================================================================== 23 */
+console.log('\n23. A dip larger than the tank is refused');
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(500);
+await p.selectOption('#dp_tank',{index:0});
+const dipsBefore = await p.evaluate(()=>(window.BunkSoft.S.days[window.BunkSoft.S.date].dips||[]).length);
+await p.fill('#dp_qty','9999999'); await p.click('[data-act="adddip"]'); await p.waitForTimeout(800);
+const dipsAfter = await p.evaluate(()=>(window.BunkSoft.S.days[window.BunkSoft.S.date].dips||[]).length);
+ok('nothing was written', dipsBefore===dipsAfter, dipsBefore+' → '+dipsAfter);
+ok('the message names the capacity', /cannot dip at/i.test(await toastText()), await toastText());
+
+/* ====================================================================== 24 */
+console.log('\n24. Deleting a dip puts the tank back');
+const stockBefore = await p.evaluate(()=>Number(window.BunkSoft.S.tanks[0].stock));
+const target = Math.round(stockBefore) - 300;
+await p.fill('#dp_qty',String(target));
+await p.click('[data-act="adddip"]'); await p.waitForTimeout(1200);
+const stockAtDip = await p.evaluate(()=>Number(window.BunkSoft.S.tanks[0].stock));
+ok('the dip set the tank ('+stockBefore+' → '+stockAtDip+')', near(stockAtDip, target));
+await p.evaluate(()=>{
+  const d=window.BunkSoft.S.days[window.BunkSoft.S.date];
+  const last=(d.dips||[]).slice(-1)[0];
+  document.querySelector(`[data-act="deldip"][data-id="${last.id}"]`).click();
+});
+await p.waitForTimeout(1300);
+const stockAfterDelete = await p.evaluate(()=>Number(window.BunkSoft.S.tanks[0].stock));
+ok('deleting it restored the previous figure ('+stockAtDip+' → '+stockAfterDelete+')',
+   near(stockAfterDelete, stockBefore), 'expected '+stockBefore);
 
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();

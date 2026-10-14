@@ -11,7 +11,7 @@
    index.html that an earlier build saved against a .js url when the host
    answered a missing asset with the HTML shell — that poisoned entry kept the
    app blank even after the real file was deployed. */
-const CACHE = 'bunksoft-v6';
+const CACHE = 'bunksoft-v7';
 const SHELL = ['./index.html', './css/app.css', './js/config.js', './js/main.js',
                './js/app.js', './js/db.js', './manifest.webmanifest', './icons/icon.svg'];
 

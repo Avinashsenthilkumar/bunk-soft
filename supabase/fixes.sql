@@ -214,3 +214,42 @@ revoke execute on function public.trg_reading_sane() from public, anon, authenti
 --  the moment this file finishes rather than several minutes later.
 -- ============================================================================
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+--  8. Deleting a dip puts the tank back
+--
+--  A dip SETS stock, and the only trigger on dip_readings fired on INSERT. So
+--  recording 7,180 L against a book figure of 8,000 L moved the tank to 7,180,
+--  and then deleting that dip — a mis-keyed figure, say — left the tank
+--  standing at 7,180 with nothing on record to explain it. The 820 L never
+--  came back.
+--
+--  Undoing it is an adjustment, not a reset: sales and decantation since the
+--  dip must survive. And if a LATER dip has been taken on the same tank, this
+--  one's effect was already overwritten, so there is nothing to undo.
+-- ============================================================================
+create or replace function public.trg_dip_undo()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if exists (
+    select 1 from public.dip_readings d
+    where d.tank_id = old.tank_id
+      and (d.taken_at, d.id) > (old.taken_at, old.id)
+  ) then
+    return old;                 -- a later dip already decides the figure
+  end if;
+
+  update public.tanks
+     set current_stock = current_stock + (old.book_qty - old.dip_qty)
+   where id = old.tank_id;
+  return old;
+end $$;
+
+drop trigger if exists dips_undo on public.dip_readings;
+create trigger dips_undo
+  after delete on public.dip_readings
+  for each row execute function public.trg_dip_undo();
+
+revoke execute on function public.trg_dip_undo() from public, anon, authenticated;
+
+notify pgrst, 'reload schema';

@@ -70,6 +70,14 @@ export function createFakeClient(T, state) {
     dip_readings: r => { const t = T.tanks.find(x => x.id === r.tank_id); if (t) t.current_stock = +r.dip_qty; }
   };
   const AFTER_DELETE = {
+    /* trg_dip_undo() in supabase/fixes.sql: removing a dip gives back what it
+       took, unless a later dip on the same tank already decides the figure. */
+    dip_readings: r => {
+      const later = T.dip_readings.some(d => d.tank_id === r.tank_id && d.id !== r.id &&
+        String((d.taken_at || '') + d.id) > String((r.taken_at || '') + r.id));
+      if (later) return;
+      bumpTank(r.tank_id, (+r.book_qty || 0) - (+r.dip_qty || 0));
+    },
     readings: r => bumpTank(r.tank_id, +sold(r)),
     fuel_receipts: r => bumpTank(r.tank_id, -r.qty),
     shifts: s => T.readings.filter(r => r.shift_id === s.id).forEach(r => {

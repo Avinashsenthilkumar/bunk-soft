@@ -375,3 +375,58 @@ entry carries a key Vercel would reject, that there is no unknown top-level
 key, and that the catch-all does not match `/js/`, `/css/` or `/icons/` paths
 while still matching an ordinary route. That check fails on exactly the
 mistake that broke this deployment.
+
+---
+
+# 14 October, evening — three more from testing
+
+Version 1.3.0. **`supabase/fixes.sql` must be run again** — it has gained a
+trigger. It is safe to run on a database that already has it.
+
+### 28. The opening meter reading could be typed over
+
+It is carried from the previous shift's closing, and it decides how many
+litres the shift is credited with. Any operator could edit it: lower the
+opening and the shift shows more litres sold than passed the meter; raise it
+and fuel disappears. Nothing on screen discouraged it.
+
+The field is read-only now. An owner or manager can unlock it deliberately —
+a button, a confirmation naming what unlocking changes — for the one case
+that needs it, a meter reset or swapped. The unlock lasts until the shift is
+saved or the date or shift changes, then it locks again on its own.
+
+### 29. A tank accepted more than it could hold
+
+A decantation larger than the room left was a confirmation, so a mis-keyed
+80,000 for 8,000 went through on a reflex OK and left the tank holding more
+than its capacity. This is not a judgement call — the fuel will not go in —
+so it is refused outright, and the message says how much will fit. The one
+legitimate escape is named: if the book figure itself is wrong, record a dip
+first and it corrects with a trail. A load that fits is unaffected.
+
+A dip larger than the tank's capacity is refused the same way.
+
+### 30. Deleting a dip left the stock where the dip put it
+
+`dips_stock` fired on INSERT only. A dip SETS stock, so recording 7,180 L
+against a book figure of 8,000 moved the tank to 7,180 — and deleting that
+dip, a mis-keyed figure say, left the tank standing at 7,180 with nothing on
+record to explain it. The 820 L never came back.
+
+`trg_dip_undo()` now fires on DELETE and gives it back as an adjustment, not
+a reset, so sales and decantation since the dip survive. If a *later* dip has
+been taken on the same tank, that one already decides the figure and deleting
+the older one correctly changes nothing.
+
+### Proving it
+
+Twelve new checks in `npm run test:domain` (57 now): the opening is read-only
+and a scripted edit does not survive, the unlock round-trips, an over-capacity
+load and an over-capacity dip are both refused while a load that fits is
+accepted, and deleting a dip restores the tank. The trigger's three cases —
+undo, a sale surviving the undo, and an older dip under a newer one — are
+proved directly against Postgres.
+
+`test/headers.mjs` now reads `vercel.json` as JSON rather than by regex; a
+reflow of that file's whitespace had made the policy comparison silently find
+nothing.

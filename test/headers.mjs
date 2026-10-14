@@ -130,7 +130,18 @@ console.log('\n4. The four copies of the policy agree');
   };
   const fromHeaders = headersFor('/')['Content-Security-Policy'];
   const fromNetlify = grab('netlify.toml', /Content-Security-Policy = "([^"]+)"/);
-  const fromVercel  = grab('vercel.json', /"Content-Security-Policy", "value": "([^"]+)"/);
+  /* Read it as JSON, not with a regex: the file is machine-formatted and a
+     reflow of the whitespace used to make this check silently find nothing. */
+  const fromVercel = (() => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync('vercel.json', 'utf8'));
+      for (const h of cfg.headers || [])
+        if (h.source === '/(.*)')
+          for (const kv of h.headers || [])
+            if (kv.key === 'Content-Security-Policy') return kv.value;
+    } catch {}
+    return '';
+  })();
   const fromNginx   = grab('deploy/nginx.conf', /add_header Content-Security-Policy "([^"]+)"/);
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   ok('netlify.toml matches web/_headers', norm(fromNetlify) === norm(fromHeaders),

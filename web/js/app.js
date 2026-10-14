@@ -48,7 +48,11 @@ const S={
   date:today(), tab:'dash', shift:null, range:null, modal:null, chartMode:'value', members:[], report:null,
   /* dates actually read from the database, and the opening readings the
      server gave us for the current date */
-  loadedDates:new Set(), openings:{}
+  loadedDates:new Set(), openings:{},
+  /* Openings are read-only. An owner or manager unlocks them deliberately,
+     for a meter that was reset or swapped, and the unlock lasts only until
+     they save or move away. */
+  openUnlocked:false
 };
 const CC=['var(--c0)','var(--c1)','var(--c2)','var(--c3)','var(--c4)'];
 const pcol=pid=>{const i=(S.config?.products||[]).findIndex(p=>p.id===pid);return CC[(i<0?4:i)%5];};
@@ -759,7 +763,7 @@ function vShift(){
         <tbody>${t.lines.map(l=>`<tr data-noz="${esc(l.noz.id)}">
           <td><b>${esc(l.noz.name)}</b>${l.noz.archived?' <span class="chip" title="This nozzle has been retired. Its past readings stay on the books.">retired</span>':''}</td>
           <td><span class="chip"><i class="dot" style="background:${pcol(l.noz.product)}"></i>${esc(prod(l.noz.product).short)}</span></td>
-          <td class="r"><input class="mono r" type="number" step="0.01" data-fld="open" value="${l.open||''}" style="text-align:right"></td>
+          <td class="r"><input class="mono r" type="number" step="0.01" data-fld="open" value="${l.open||''}" style="text-align:right"${S.openUnlocked?'':' readonly tabindex="-1"'} title="${S.openUnlocked?'Unlocked. Correct this only if the meter was reset or swapped.':'Carried from the previous shift\'s closing. An owner or manager can unlock it if a meter was reset or swapped.'}"></td>
           <td class="r"><input class="mono r" type="number" step="0.01" data-fld="close" value="${l.close||''}" style="text-align:right" placeholder="totalizer"></td>
           <td class="r"><input class="mono r" type="number" step="0.01" data-fld="test" value="${l.test||''}" style="text-align:right" placeholder="0"></td>
           <td class="r"><input class="mono r" type="number" step="1" data-fld="roll" value="${l.rollover||''}" style="text-align:right" placeholder="0" title="Only when the totalizer wrapped past all nines. Use the Check readings button to fill this in."></td>
@@ -768,7 +772,11 @@ function vShift(){
           <td class="r num" data-out="amt">${money(l.amount)}</td></tr>`).join('')}
           <tr class="totalrow"><td colspan="6">Total</td><td class="r num" id="tQty">${nf(t.qty,2)}</td><td></td><td class="r num" id="tAmt">${money(t.fuel)}</td></tr>
         </tbody></table></div>
-      <div class="setupnote" id="nozWarn">Opening is carried from the previous shift's closing — correct it only if the meter was reset or swapped. Test litres are returned to the tank and are not billed. Rollover stays 0 unless the totalizer wrapped past all nines; if a closing is below its opening the app will offer to record the wrap for you.</div>
+      <div class="setupnote" id="nozWarn">Opening is carried from the previous shift's closing and cannot be typed over — that is what stops a meter being walked backwards. Test litres are returned to the tank and are not billed. Rollover stays 0 unless the totalizer wrapped past all nines; if a closing is below its opening the app will offer to record the wrap for you.</div>
+      ${repo.canConfigure()?`<div style="margin-top:8px">
+        <button class="btn ghost sm" data-act="unlockopen">${S.openUnlocked?'Lock opening readings':'Correct an opening reading'}</button>
+        ${S.openUnlocked?'<span class="hint" style="margin-left:8px">Openings are editable until you save or leave this shift.</span>':''}
+      </div>`:''}
       ${sh.closed&&sh.ratesAtClose?`<div class="setupnote">Valued at the rates this shift was closed at. Later rate revisions do not restate it.</div>`:''}
 
       <div class="sectitle">Credit slips (udhaar)</div>
@@ -1298,7 +1306,7 @@ document.addEventListener('click',async e=>{
   if(tabBtn){S.tab=tabBtn.dataset.tab;S.modal=null;render();window.scrollTo({top:0});return;}
   const b=e.target.closest('[data-act]'); if(!b)return;
   const act=b.dataset.act, day=S.config?getDay(S.date):null;
-  const goDate=d=>{ S.date=d; mutate(async()=>{},''); };
+  const goDate=d=>{ S.date=d; S.openUnlocked=false; mutate(async()=>{},''); };
 
   const A={
     /* ---- navigation ---- */
@@ -1312,7 +1320,13 @@ document.addEventListener('click',async e=>{
       render();},
     'chartmode':()=>{S.chartMode=S.chartMode==='value'?'qty':'value';render();},
     'goshift':()=>{S.shift=b.dataset.shift;S.tab='shift';render();window.scrollTo({top:0});},
-    'setshift':()=>{S.shift=b.dataset.shift;render();},
+    'setshift':()=>{S.shift=b.dataset.shift;S.openUnlocked=false;render();},
+    'unlockopen':()=>{
+      if(!repo.canConfigure())return toast('Only an owner or manager can correct an opening reading.');
+      if(!S.openUnlocked&&!confirm('Opening readings are carried from the previous shift\'s closing.\n\n'
+        +'Change one only if the meter was reset or swapped — editing it otherwise changes how many litres this shift is shown to have sold.\n\nUnlock them?'))return;
+      S.openUnlocked=!S.openUnlocked; render();
+    },
     'closemodal':()=>{S.modal=null;render();},
     'signout':()=>{ window.dispatchEvent(new CustomEvent('bunksoft:signout')); },
     'switchbunk':()=>{ window.dispatchEvent(new CustomEvent('bunksoft:switchbunk')); },
@@ -1609,6 +1623,7 @@ function saveShift(close){
   if(sh.closed&&!sh.ratesAtClose)sh.ratesAtClose=clone(day.rates||currentRates());
   if(!sh.closed)sh.ratesAtClose=null;
   day.shifts[nm]=sh;
+  S.openUnlocked=false;          /* relock as soon as the correction is saved */
   /* The database recalculates tank stock from the readings we send. */
   return mutate(async()=>{
     await repo.ensureDay(S.date,day.rates&&Object.keys(day.rates).length?day.rates:currentRates());
@@ -1653,11 +1668,17 @@ function addReceipt(){
   if(qty<=0)return toast('Enter the quantity decanted.');
   if(rate<0)return toast('The purchase rate cannot be negative.');
   const t=tank(tid); if(!t)return toast('Pick a tank.');
-  /* A decantation larger than the tank can hold is a typo — 80000 for 8000. */
-  const room=num(t.capacity)-num(t.stock);
-  if(num(t.capacity)&&qty>room&&
-     !confirm(t.name+' holds '+nf(t.capacity,0)+' L and already has '+nf(t.stock,0)+' L in it, '+
-              'so only '+nf(Math.max(0,room),0)+' L will fit.\n\nRecord '+nf(qty,0)+' L anyway?')) return;
+  /* A decantation larger than the tank can hold is not a judgement call — the
+     fuel physically will not go in. It used to be a confirmation, which meant
+     a mis-keyed 80,000 for 8,000 went through on a reflex OK and left the
+     tank holding more than it can. Refused outright now, with the one
+     legitimate way out named: if the book figure itself is wrong, a dip
+     corrects it and leaves a trail. */
+  const cap=num(t.capacity), room=r2(cap-num(t.stock));
+  if(cap&&qty>room){
+    return toast(t.name+' holds '+nf(cap,0)+' L and already has '+nf(t.stock,0)+' L in it, '+
+      'so only '+nf(Math.max(0,room),0)+' L will fit. If the book figure is wrong, record a dip first.');
+  }
   return mutate(()=>repo.addReceipt(S.date,{tank:tid,product:t.product,qty,rate,
     invoice:$('#rc_inv').value.trim(),truck:$('#rc_truck').value.trim()}),
     nf(qty,0)+' L decanted into '+t.name+'.');
@@ -1670,6 +1691,11 @@ function addDip(){
   if($('#dp_qty').value==='')return toast('Enter the dip quantity.');
   const dip=num($('#dp_qty').value), t=tank(tid); if(!t)return toast('Pick a tank.');
   if(dip<0)return toast('A dip cannot be negative.');
+  /* A tank cannot measure more than it holds. */
+  if(num(t.capacity)&&dip>num(t.capacity)){
+    return toast(t.name+' holds '+nf(t.capacity,0)+' L, so it cannot dip at '+nf(dip,0)+' L. '+
+      'Check the figure, or correct the capacity under Settings.');
+  }
   let res=null;
   return mutate(async()=>{ res=await repo.addDip(S.date,{tank:tid,dip}); })
     .then(ok=>{
