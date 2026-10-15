@@ -937,7 +937,10 @@ function vCredit(){
     <div class="pb tight"><div class="tw"><table>
       <thead><tr><th>Customer</th><th>Mode</th><th>Note</th><th class="r">Amount</th><th></th></tr></thead>
       <tbody>${(day.payments||[]).map(p=>`<tr><td>${esc(cust(p.cust)?.name||'—')}</td><td>${esc(p.mode)}</td><td>${esc(p.note||'—')}</td>
-        <td class="r num">${money(p.amount)}</td><td class="r"><button class="x" data-act="delpay" data-id="${esc(p.id)}">✕</button></td></tr>`).join('')
+        <td class="r num">${money(p.amount)}</td>
+        <td class="r" style="white-space:nowrap">
+          <button class="btn ghost sm" data-act="payreceipt" data-id="${esc(p.id)}" data-cust="${esc(p.cust)}">Receipt</button>
+          <button class="x" data-act="delpay" data-id="${esc(p.id)}">✕</button></td></tr>`).join('')
         ||'<tr><td colspan="5" class="empty">No payments received on this date.</td></tr>'}
       </tbody></table></div></div>
   </div>`;
@@ -1357,6 +1360,9 @@ document.addEventListener('click',async e=>{
     'savecust':()=>saveCustForm(),
     'savepay':()=>savePayForm(),
     'delpay':()=>mutate(()=>repo.deleteTxn(b.dataset.id),'Receipt removed.'),
+    'payreceipt':()=>openPayReceipt(b.dataset.cust,b.dataset.id),
+    'copy-pay':()=>copyText(payText()),
+    'pdf-pay':()=>pdfPayReceipt(),
 
     /* ---- stock ---- */
     'addreceipt':()=>addReceipt(),
@@ -1772,8 +1778,161 @@ function savePayForm(){
               money(amt-num(c.balance))+' as an advance.\n\nRecord it anyway?')) return;
   const row={cust:c.id,amount:amt,mode:$('#pm_mode').value,note:$('#pm_note').value.trim()};
   S.modal=null;
-  return mutate(()=>repo.addPayment(S.date,row),money(amt)+' received from '+c.name+'.');
+  const before=num(c.balance);
+  return mutate(()=>repo.addPayment(S.date,row),money(amt)+' received from '+c.name+'.')
+    .then(ok=>{
+      if(!ok)return;
+      /* Hand them the slip straight away. The newest payment for this
+         customer on this date is the one just written. */
+      const fresh=cust(c.id); if(!fresh)return;
+      const t=(fresh.txns||[]).find(x=>x.type==='payment'&&x.date===S.date
+        &&Math.abs(num(x.amount)-amt)<0.01);
+      if(t)openPayReceipt(c.id,t.id);
+      else toast('Receipt saved. Open it from the Receipts list below.');
+    });
 }
+/* ============================ payment receipt ============================
+   A credit customer rarely clears the whole outstanding — they pay what they
+   have and the rest carries. The slip they walk away with has to say all
+   three figures, or the next argument is about which one was agreed.
+
+   Everything here is derived from the ledger, so an old receipt reprints
+   exactly as it was issued: txn.bal is the balance AFTER that entry, and the
+   balance before it is simply that plus what was paid. */
+
+/* Indian numbering, for the "Rupees ... only" line every receipt carries. */
+const ONES=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve',
+  'Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+const TENS=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+function under100(n){ return n<20?ONES[n]:(TENS[Math.floor(n/10)]+(n%10?' '+ONES[n%10]:'')); }
+function under1000(n){
+  const h=Math.floor(n/100), r=n%100;
+  return (h?ONES[h]+' Hundred'+(r?' ':''):'')+(r?under100(r):'');
+}
+function inWords(amount){
+  let n=Math.floor(Math.abs(Number(amount)||0));
+  const paise=Math.round((Math.abs(Number(amount)||0)-n)*100);
+  if(n===0&&!paise)return 'Zero';
+  const parts=[];
+  const take=(div,label)=>{const q=Math.floor(n/div); if(q){parts.push(under1000(q)+' '+label); n%=div;}};
+  take(10000000,'Crore'); take(100000,'Lakh'); take(1000,'Thousand');
+  if(n)parts.push(under1000(n));
+  let out=parts.join(' ').replace(/\s+/g,' ').trim();
+  if(paise)out+=' and '+under100(paise)+' Paise';
+  return out;
+}
+
+/* A stable number for the slip: the same payment always reprints the same
+   one, and it carries its date. */
+const receiptNo=(txn)=>'RC-'+String(txn.date||'').replace(/-/g,'').slice(2)+'-'+
+  String(txn.id||'').replace(/[^a-zA-Z0-9]/g,'').slice(-5).toUpperCase();
+
+function payData(custId,txnId){
+  const c=cust(custId); if(!c)return null;
+  const txn=(c.txns||[]).find(t=>t.id===txnId&&t.type==='payment');
+  if(!txn)return null;
+  const after=num(txn.bal), paid=num(txn.amount);
+  return {c,txn,paid,before:r2(after+paid),after:r2(after)};
+}
+function openPayReceipt(custId,txnId){
+  if(!payData(custId,txnId))return toast('That receipt is no longer on record.');
+  S.report={pay:{cust:custId,txn:txnId}}; S.modal=vPayReceipt; render();
+}
+
+function vPayReceipt(){
+  const d=payData(S.report.pay.cust,S.report.pay.txn);
+  if(!d)return '<div class="scrim"><div class="modal"><div class="pb">That receipt is no longer on record.</div></div></div>';
+  const {c,txn,paid,before,after}=d;
+  const settled=after<=0.5;
+  return `<div class="scrim"><div class="modal"><div class="rpt">
+    <div class="rpthead">
+      <div class="rt">${esc(S.config.station||'BunkSoft')}</div>
+      <div class="rs">${esc([S.config.brand,S.config.place].filter(Boolean).join(' · '))}</div>
+      <div class="rb">Payment receipt</div>
+      <div class="rs" style="margin-top:8px">No. ${esc(receiptNo(txn))} · ${dmy(txn.date)}</div>
+    </div>
+
+    <div class="rsec">Received from</div>
+    <div class="rline"><span>Name</span><span><b>${esc(c.name)}</b></span></div>
+    ${c.vehicle?`<div class="rline"><span>Vehicle</span><span>${esc(c.vehicle)}</span></div>`:''}
+    ${c.phone?`<div class="rline"><span>Phone</span><span>${esc(c.phone)}</span></div>`:''}
+    <div class="rline"><span>Mode</span><span>${esc(txn.label||'Cash')}</span></div>
+
+    <div class="rsec">Account</div>
+    <div class="rline"><span>Outstanding before this payment</span><span>${money2(before)}</span></div>
+    <div class="rline big" style="background:var(--good-soft);color:var(--good)">
+      <span>Amount received</span><span>${money2(paid)}</span></div>
+    <div class="rline" style="padding-top:0;color:var(--ink-3);font-size:12px">
+      <span>Rupees ${esc(inWords(paid))} only</span><span></span></div>
+    <div class="rline big" style="background:${settled?'var(--good-soft)':'var(--bad-soft)'};color:${settled?'var(--good)':'var(--bad)'}">
+      <span>${settled?'Balance — account settled':'Balance still due'}</span><span>${money2(Math.max(0,after))}</span></div>
+    ${after<-0.5?`<div class="rline"><span>Advance held</span><span>${money2(Math.abs(after))}</span></div>`:''}
+
+    <div class="rsign"><div>Customer signature</div><div>Received by${SESSION_EMAIL?' · '+esc(SESSION_EMAIL):''}</div></div>
+  </div>
+  <div class="pb" style="border-top:1px solid var(--line);display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap">
+    <button class="btn ghost" data-act="closemodal">Close</button>
+    <button class="btn ghost" data-act="copy-pay">Copy for WhatsApp</button>
+    <button class="btn" data-act="pdf-pay">Download PDF</button>
+  </div></div></div>`;
+}
+
+function payText(){
+  const d=payData(S.report.pay.cust,S.report.pay.txn); if(!d)return '';
+  const {c,txn,paid,before,after}=d; const L=[];
+  L.push('*'+(S.config.station||'BunkSoft')+'*');
+  if(S.config.place)L.push(S.config.place);
+  L.push('');
+  L.push('*PAYMENT RECEIPT*');
+  L.push('No. '+receiptNo(txn)+'  ·  '+dmy(txn.date));
+  L.push('');
+  L.push('Received from: '+c.name);
+  if(c.vehicle)L.push('Vehicle: '+c.vehicle);
+  L.push('Mode: '+(txn.label||'Cash'));
+  L.push('');
+  L.push('Outstanding before  '+money2(before));
+  L.push('*Amount received    '+money2(paid)+'*');
+  L.push('Rupees '+inWords(paid)+' only');
+  L.push(after<=0.5?'*Balance            NIL — settled*':'*Balance still due   '+money2(Math.max(0,after))+'*');
+  L.push('');
+  L.push('Thank you.');
+  return L.join('\n');
+}
+
+async function pdfPayReceipt(){
+  let lib; try{ lib=await pdfReady(); }catch(e){ return toast('Could not load the PDF library. Check the connection and try again.'); }
+  const d=payData(S.report.pay.cust,S.report.pay.txn); if(!d)return;
+  const {c,txn,paid,before,after}=d;
+  const doc=new lib.jsPDF({unit:'pt',format:'a4'});
+  let y=pdfHead(doc,'PAYMENT RECEIPT','No. '+receiptNo(txn)+'   ·   '+dmy(txn.date));
+  y=pdfCards(doc,y,[
+    {k:'Amount received',v:R(paid),s:txn.label||'Cash',tint:[226,245,236],ink:[14,122,78]},
+    {k:'Outstanding before',v:R(before),s:'as it stood',tint:[228,238,253],ink:BLUE},
+    {k:after<=0.5?'Balance':'Balance still due',v:after<=0.5?'NIL':R(Math.max(0,after)),
+      s:after<=0.5?'account settled':'carried forward',
+      tint:after<=0.5?[226,245,236]:[252,228,233],ink:after<=0.5?[14,122,78]:[200,30,66]}
+  ]);
+  y=pdfSec(doc,y,'Received from');
+  y=pdfRows(doc,y,[
+    ['Name',c.name],
+    ...(c.vehicle?[['Vehicle',c.vehicle]]:[]),
+    ...(c.phone?[['Phone',c.phone]]:[]),
+    ['Payment mode',txn.label||'Cash']
+  ]);
+  y=pdfSec(doc,y,'Account');
+  y=pdfRows(doc,y,[
+    ['Outstanding before this payment',R(before)],
+    ['Amount received',R(paid),true],
+    /* left-aligned as the label: right-aligning a long sentence at the amount
+       column would run it back under the one beside it */
+    ['Rupees '+inWords(paid)+' only',''],
+    [after<=0.5?'Balance — account settled':'Balance still due',
+      R(Math.max(0,after)),true, after<=0.5?[14,122,78]:[200,30,66]]
+  ]);
+  pdfFinish(doc,true,y);
+  await savePdf(doc,'receipt-'+receiptNo(txn)+'.pdf');
+}
+
 function openLedger(id){
   const c=cust(id); if(!c)return;
   const rows=(c.txns||[]).slice(0,60);
@@ -1784,11 +1943,12 @@ function openLedger(id){
       ${stat('Phone',esc(c.phone||'—'),'')}
     </div>
     ${c.partial?`<div class="setupnote" style="margin:0 0 10px">Only the most recent transactions are shown. The outstanding figure above is the full balance from the database; the running balance in the last rows of this list starts from the oldest entry shown.</div>`:''}
-    <div class="tw" style="max-height:44vh;overflow-y:auto"><table><thead><tr><th>Date</th><th>Detail</th><th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
+    <div class="tw" style="max-height:44vh;overflow-y:auto"><table><thead><tr><th>Date</th><th>Detail</th><th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th><th></th></tr></thead>
     <tbody>${rows.length?rows.map(t=>`<tr><td class="num">${dshort(t.date)}</td><td>${esc(t.label||t.ref||'')}</td>
       <td class="r num">${t.type!=='payment'?money(t.amount):''}</td><td class="r num">${t.type==='payment'?money(t.amount):''}</td>
-      <td class="r num">${money(t.bal)}</td></tr>`).join('')
-      :'<tr><td colspan="5" class="empty">No transactions yet.</td></tr>'}</tbody></table></div>`,
+      <td class="r num">${money(t.bal)}</td>
+      <td class="r">${t.type==='payment'?`<button class="btn ghost sm" data-act="payreceipt" data-id="${esc(t.id)}" data-cust="${esc(id)}">Receipt</button>`:''}</td></tr>`).join('')
+      :'<tr><td colspan="6" class="empty">No transactions yet.</td></tr>'}</tbody></table></div>`,
     `<button class="btn ghost" data-act="closemodal">Close</button><button class="btn" data-act="pay" data-id="${esc(id)}">Receive payment</button>`);
   render();
 }
