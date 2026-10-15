@@ -126,6 +126,14 @@ code,.mono{font-family:var(--fm)}
 .linkbtn{border:0;background:transparent;color:var(--accent);cursor:pointer;font-weight:700;padding:6px 0;font-size:13px}
 .linkbtn:hover{text-decoration:underline}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+/* A password field and the buttons that act on it, on ONE line with their
+   bottoms level. The helper sentence goes UNDER the whole row (.pwhint), not
+   inside the field: in the grid it used to live in, that sentence made the
+   field taller than its neighbours and pushed the buttons out of line. */
+.pwrow{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:12px}
+.pwrow .f{flex:1 1 240px;min-width:0}
+.pwrow .btn{flex:none}
+.pwhint{margin:7px 0 0;font-size:11.5px;color:var(--ink-3);line-height:1.5}
 
 /* ---------- tables ---------- */
 .tw{overflow-x:auto;-webkit-overflow-scrolling:touch}

@@ -42,6 +42,7 @@ await p.route('**/fonts.googleapis.com/**',r=>r.fulfill({status:200,contentType:
 let pass=0, fail=0;
 const ok=(l,v,extra)=>{ v?pass++:fail++; console.log((v?'  PASS  ':'  FAIL  ')+l+(v||extra===undefined?'':'\n         '+extra)); };
 const near=(a,b,tol=0.01)=>Math.abs(Number(a)-Number(b))<tol;
+const shown=async sel=>{ const el=await p.$(sel); return !!el && await el.isVisible(); };
 
 /* --------------------------------------------------------------- fixtures -- */
 await p.goto(BASE); await p.waitForTimeout(600);
@@ -520,6 +521,97 @@ await p.waitForTimeout(1300);
 const stockAfterDelete = await p.evaluate(()=>Number(window.BunkSoft.S.tanks[0].stock));
 ok('deleting it restored the previous figure ('+stockAtDip+' → '+stockAfterDelete+')',
    near(stockAfterDelete, stockBefore), 'expected '+stockBefore);
+
+/* ====================================================================== 25 */
+console.log('\n25. A part payment hands over a receipt');
+await setDate(D0); await p.waitForTimeout(500);
+await p.click('[data-tab="credit"]'); await p.waitForTimeout(600);
+/* Limit Test Co owes 5,000 from case 9; pay 1,500 of it. */
+await p.evaluate(()=>{
+  const c=window.BunkSoft.S.customers.find(x=>x.name==='Limit Test Co');
+  document.querySelector(`[data-act="pay"][data-id="${c.id}"]`).click();
+});
+await p.waitForTimeout(400);
+const owed = await p.evaluate(()=>
+  Number(window.BunkSoft.S.customers.find(c=>c.name==='Limit Test Co').balance));
+await p.fill('#pm_amt','1500');
+await p.selectOption('#pm_mode','Cash');
+await answer(true);
+await p.click('[data-act="savepay"]'); await p.waitForTimeout(1500);
+const rcpt = await p.textContent('#layer');
+ok('the receipt opens by itself', /Payment receipt/i.test(rcpt), rcpt.slice(0,100));
+ok('it names the customer', /Limit Test Co/.test(rcpt));
+ok('it shows what was owed before (₹'+owed+')', rcpt.includes('5,000.00'), rcpt.slice(0,400));
+ok('it shows what was paid', rcpt.includes('1,500.00'));
+ok('it shows the balance still due', /Balance still due/i.test(rcpt) && rcpt.includes('3,500.00'));
+ok('and the amount in words', /One Thousand Five Hundred/i.test(rcpt), rcpt.slice(0,600));
+ok('it carries a receipt number', /RC-\d{6}-/.test(rcpt), rcpt.slice(0,200));
+await p.keyboard.press('Escape'); await p.waitForTimeout(400);
+
+/* reprint from the day's list */
+await p.click('[data-tab="credit"]'); await p.waitForTimeout(600);
+ok('an old receipt can be reprinted', !!(await p.$('[data-act="payreceipt"]')));
+await p.click('[data-act="payreceipt"]'); await p.waitForTimeout(600);
+const again = await p.textContent('#layer');
+ok('the reprint shows the same figures', again.includes('1,500.00') && again.includes('3,500.00'));
+await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+
+/* a payment that clears the account says so */
+await p.evaluate(()=>{
+  const c=window.BunkSoft.S.customers.find(x=>x.name==='Limit Test Co');
+  document.querySelector(`[data-act="pay"][data-id="${c.id}"]`).click();
+});
+await p.waitForTimeout(400);
+await p.fill('#pm_amt','3500');
+await answer(true);
+await p.click('[data-act="savepay"]'); await p.waitForTimeout(1500);
+const cleared = await p.textContent('#layer');
+ok('clearing the balance reads as settled', /account settled/i.test(cleared), cleared.slice(0,400));
+await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+
+/* ====================================================================== 26 */
+console.log('\n26. A password reset link lands on a screen that sets one');
+/* Supabase hands the recovery back in the URL. With a session already in this
+   browser, the app must still stop and ask for a new password rather than
+   walking the person into their bunk. */
+/* (a) a fresh tab — the ordinary case, a full page load carrying the hash */
+await p.goto('about:blank');
+await p.goto(BASE + '#type=recovery'); await p.waitForTimeout(1500);
+ok('a fresh tab stops and asks for a new password',
+   /Choose a new password/i.test(await p.textContent('body')));
+ok('it does not open the bunk underneath', !(await shown('[data-tab="dash"]')));
+
+/* (b) the same tab with the app already open — only the hash changes, so the
+       browser does not reload and route() never runs again */
+await p.goto(BASE); await p.waitForTimeout(1500);
+await p.evaluate(()=>{ location.hash = '#type=recovery'; }); await p.waitForTimeout(900);
+ok('a link followed in the open tab does the same',
+   /Choose a new password/i.test(await p.textContent('body')));
+
+await p.fill('#np_a','short'); await p.fill('#np_b','short');
+await p.click('#np_go'); await p.waitForTimeout(500);
+ok('too short is refused', /at least 10 characters/i.test(await p.textContent('body')));
+
+await p.fill('#np_a','abcdefghijkl'); await p.fill('#np_b','abcdefghijkl');
+await p.click('#np_go'); await p.waitForTimeout(500);
+ok('letters only is refused', /letters and digits/i.test(await p.textContent('body')));
+
+await p.fill('#np_a','BunkSoft2027x'); await p.fill('#np_b','BunkSoft2027y');
+await p.click('#np_go'); await p.waitForTimeout(500);
+ok('a mismatch is refused', /do not match/i.test(await p.textContent('body')));
+
+await p.fill('#np_a','BunkSoft2027x'); await p.fill('#np_b','BunkSoft2027x');
+await p.click('#np_go'); await p.waitForTimeout(1800);
+ok('a good one is accepted and the app opens', await shown('[data-tab="dash"]'));
+ok('the recovery token is wiped from the address bar',
+   !/type=recovery/.test(await p.evaluate(()=>location.href)));
+
+/* and the new password is the one that works now */
+await p.evaluate(()=>window.dispatchEvent(new CustomEvent('bunksoft:signout')));
+await p.waitForTimeout(1200);
+await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','BunkSoft2027x');
+await p.click('#au_go'); await p.waitForTimeout(1600);
+ok('the new password signs in', await shown('[data-tab="dash"]'));
 
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();

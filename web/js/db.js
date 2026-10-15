@@ -77,8 +77,15 @@ export const auth = {
   signIn: (email, password) => sb.auth.signInWithPassword({ email: String(email || '').trim().toLowerCase(), password }),
   reset: (email) => sb.auth.resetPasswordForEmail(String(email || '').trim().toLowerCase(),
     { redirectTo: new URL('.', location.href).href }),
+  /* Used by the screen a password-reset link lands on. Supabase puts the
+     browser into a short-lived recovery session when the link is followed;
+     this is what turns that into a new password. */
+  setPassword: (password) => sb.auth.updateUser({ password }),
   signOut: () => sb.auth.signOut(),
-  onChange: (fn) => sb.auth.onAuthStateChange((_e, s) => fn(s))
+  /* The event matters as well as the session: Supabase fires
+     PASSWORD_RECOVERY when a reset link is followed, and the app has to show
+     the "choose a new password" screen rather than open the bunk. */
+  onChange: (fn) => sb.auth.onAuthStateChange((e, s) => fn(s, e))
 };
 
 /* Errors from PostgREST are readable but long; trim to something an operator

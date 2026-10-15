@@ -430,3 +430,180 @@ proved directly against Postgres.
 `test/headers.mjs` now reads `vercel.json` as JSON rather than by regex; a
 reflow of that file's whitespace had made the policy comparison silently find
 nothing.
+
+---
+
+# 14 October, late — the SQL files were not re-runnable
+
+Version 1.3.2.
+
+Every one of these files says "safe to run again" at the top. Three of them
+were not, and it only showed when a customer actually re-ran them.
+
+### 31. Re-running a file failed partway through
+
+- `fixes.sql` dropped the old `shifts_write` policy but created
+  `shifts_insert`, `shifts_update` and `shifts_delete` without dropping them
+  first, so a second run died on *policy "shifts_insert" already exists*.
+- `admin.sql` did the same with five policies on `profiles` and `memberships`.
+- `admin.sql` defines `admin_businesses()` twice — an early version, then a
+  later one that adds the `disabled` flag. Only the later one dropped the
+  function first, so a second run could not narrow the return type back.
+- `schema.sql` had the same problem with `my_bunks()`, which `admin.sql`
+  widens.
+
+A failure partway is worse than a failure at the start: some statements have
+already committed, and which ones depends on where it stopped.
+
+Every `create policy` in all three files is now preceded by
+`drop policy if exists`, and both re-defined functions are dropped before the
+first definition. Four consecutive passes of
+`schema → admin → fixes → lock_signups` now run clean, and
+`supabase/test_fixes.sql` still reports all 20 checks passing afterwards.
+
+### 32. Re-running schema.sql silently re-opened self sign-up
+
+`schema.sql` ends with `grant execute on all functions in schema public to
+authenticated`, which hands back `create_bunk()` — the function `admin.sql`
+deliberately revokes so that nobody can create their own bunk outside the
+administration console. Anyone re-running `schema.sql` on a live database
+quietly undid that, with no error and nothing on screen.
+
+The files must therefore be run **in order, and the later ones re-run after an
+earlier one**: `schema.sql` → `admin.sql` → `fixes.sql`. That was always true
+and is now stated at the top of `schema.sql` itself, where someone about to
+paste it will see it.
+
+Verify a live database with:
+
+```sql
+select
+  has_function_privilege('authenticated','public.create_bunk(text,text,text,boolean)','EXECUTE') as self_create_bunk,
+  has_table_privilege('authenticated','public.platform_admins','SELECT')                        as read_admins,
+  exists(select 1 from pg_trigger where tgname = 'dips_undo')                                   as dip_undo_installed;
+```
+
+`false`, `false`, `true`.
+
+---
+
+# 15 October — a receipt for a credit payment
+
+Version 1.4.0. Web files only; no database change.
+
+### 33. A customer who paid part of what they owed walked away with nothing
+
+A regular rarely clears the whole outstanding — they pay what they have and
+the rest carries. Recording that produced a toast and a row in a list, and the
+customer had nothing in hand saying what they had paid or what was left. The
+next conversation about it is then one person's memory against another's.
+
+Recording a payment now opens a receipt in the same house style as the shift
+closing report, carrying everything such a slip has to:
+
+- the bunk's name, brand and place
+- a receipt number that is stable for that payment and carries its date
+  (`RC-261015-DA110`), so a reprint is the same slip rather than a new one
+- who it was received from — name, and vehicle and phone where they are on
+  record
+- the payment mode and reference
+- **outstanding before**, **amount received**, **balance still due** — the
+  three figures the argument is usually about
+- the amount in words, in Indian numbering ("Rupees One Thousand Seven Hundred
+  Sixty Five only")
+- signature lines for the customer and whoever took the money, with the
+  signed-in email beside it
+
+A payment that clears the account reads "Balance — account settled" in green
+rather than a red zero; one that overpays shows the advance held.
+
+It can be sent as a PDF or copied for WhatsApp, and reprinted later from the
+day's receipt list or from any payment row in the customer's ledger. Every
+figure is derived from the ledger itself, so an old receipt reprints exactly
+as it was issued rather than against today's balance.
+
+### Proving it
+
+Ten new checks in `npm run test:domain` (67 now): the receipt opens by itself,
+names the customer, shows all three figures, spells the amount in words,
+carries a receipt number, reprints identically from the list, and reads as
+settled when the balance reaches zero. `test/e2e.mjs` also now confirms a
+receipt is issued in the ordinary day's run.
+
+---
+
+## Round 7 — 15 October 2026 (afternoon)
+
+Three things, reported from the live site.
+
+### 34. The dashboard panels and tiles did not line up
+
+Each panel sized itself to its own contents, so two panels side by side ended
+at different heights and left a ragged step between them; the summary tiles
+did the same, with the big figure sitting at a different height in each tile
+depending on how long its label wrapped. On a wide screen it read as a page
+that had not been finished.
+
+The row now stretches its panels to a common height, each panel lays its
+body out as a column and lets the last block take up the slack, and every
+tile pushes its figure to the bottom of the tile so the numbers sit on one
+line across the row. Buttons no longer wrap their label onto a second line
+and grow taller than their neighbours.
+
+Same fix applies to the P&L Reports page, which uses the same row.
+
+### 35. The create-business fields in the admin console sat on different lines
+
+The password field, its button and the hint below it each claimed a line of
+their own, so the section ran down the page instead of across it. The four
+password rows in the console now put the field and its button on one line,
+with the field taking the free width and the button keeping its full size,
+and the hint moved underneath where it belongs. The row wraps rather than
+overflowing on a narrow window.
+
+### 36. Forgot password did nothing
+
+The sign-in screen offered no way back in. Anyone who forgot their password
+had to be reset by hand from the admin console, which is a phone call to
+somebody at Subsel in the middle of a shift.
+
+The sign-in screen now has **Forgot password**. It asks for the registered
+email, sends the reset link through Supabase and says so plainly — the same
+message whether or not the address is on record, because telling a stranger
+which emails are registered is handing them half the login.
+
+Following that link opens the app on a **Choose a new password** screen and
+nothing else: the bunk does not open underneath it, so nobody can walk past
+the reset and straight into the forecourt. The new password is checked for
+length and for not being letters alone, and has to be typed twice. Once it is
+set the recovery token is wiped from the address bar and the app opens
+normally.
+
+A link followed in a tab that already had the app open is handled too — the
+browser does not reload a page when only the `#` part of the address changes,
+so the app watches for that and stops at the reset screen anyway.
+
+**One setting is needed on Supabase for this to work.** In the Supabase
+dashboard → Authentication → URL Configuration, the app's address must be in
+**Redirect URLs**:
+
+```
+https://bunk-soft.vercel.app
+https://bunk-soft.vercel.app/
+```
+
+and **Site URL** set to `https://bunk-soft.vercel.app`. Without this Supabase
+refuses to send the user back and the link lands on an error page. For local
+testing add `http://localhost:4173` as well.
+
+### Proving it
+
+Nine new checks in `npm run test:domain` (**76** now): the reset screen
+appears in a fresh tab and in an already-open tab, the bunk stays shut behind
+it, a short password and a letters-only password and a mismatch are each
+refused, a good one is accepted, the token is wiped from the address bar, and
+the new password signs in. The other five suites were re-run against the
+changed CSS and router and are unchanged: 19 / 19 / 73 / 42 / 17.
+
+Version 1.4.1. Service-worker cache bumped to `bunksoft-v8` so returning
+phones pick up the new stylesheet. Web files only; no database change.

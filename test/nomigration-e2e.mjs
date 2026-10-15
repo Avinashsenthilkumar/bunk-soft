@@ -143,10 +143,19 @@ ok('the rollover column is still shown so nothing looks missing',
 const closings = await p.evaluate(async ()=>await window.BunkSoft.repo.lastClosings(window.BunkSoft.S.date));
 ok('lastClosings returns empty rather than throwing', closings && typeof closings==='object');
 
+console.log('\n5b. The dip note does not promise what this database cannot do');
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(600);
+const stockTxt = await p.textContent('#view');
+ok('it warns that a delete will NOT put the stock back', /will NOT put the stock back/i.test(stockTxt));
+ok('and it does not claim the stock goes back', !/stock goes back to where it stood/i.test(stockTxt));
+
 console.log('\n6. Once the migration is applied, everything comes back');
 await p.evaluate(()=>sessionStorage.removeItem('__nomigration'));
 await p.goto(BASE); await p.waitForTimeout(1800);
 ok('the banner is gone', !/one update behind/i.test(await p.textContent('#view')));
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(600);
+const stock2 = await p.textContent('#view');
+ok('and the dip note now promises the rewind', /stock goes back to where it stood/i.test(stock2));
 ok('and the app reports the migration present',
    (await p.evaluate(()=>window.BunkSoft.repo.migrationReady()))===true);
 

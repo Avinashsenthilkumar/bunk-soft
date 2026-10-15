@@ -130,6 +130,63 @@ function screenSignIn(message) {
   };
 }
 
+/* ------------------------------------------------ set a new password ---- */
+/* Where a reset link lands. Supabase turns the link into a short-lived
+   recovery session in this browser; until a new password is set we must NOT
+   route into the bunk, or the person is simply signed in and never gets to
+   change the thing they came to change. */
+function screenNewPassword(message) {
+  show(card('Choose a new password',
+    'Your reset link worked. Pick a password you have not used here before.',
+    `${message ? err(message) : ''}
+     <label class="f"><span>New password</span><input type="password" id="np_a"
+       autocomplete="new-password" placeholder="at least 10 characters"></label>
+     <label class="f"><span>Type it again</span><input type="password" id="np_b"
+       autocomplete="new-password"></label>
+     <button class="btn wide" id="np_go">Set my password</button>
+     <p class="authnote">At least 10 characters, with letters and digits.
+       Every other device stays signed in until its session expires.</p>`,
+    `Trouble? Contact ${esc(SUPPORT.contact)}.`));
+
+  const go = async () => {
+    const a = document.getElementById('np_a').value;
+    const b = document.getElementById('np_b').value;
+    if (a.length < 10) return screenNewPassword('Use at least 10 characters.');
+    if (!/[0-9]/.test(a) || !/[a-zA-Z]/.test(a))
+      return screenNewPassword('Use letters and digits, not only one or the other.');
+    if (a !== b) return screenNewPassword('The two passwords do not match.');
+    const btn = document.getElementById('np_go');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const { error } = await DB.auth.setPassword(a);
+      if (error) return screenNewPassword(readableAuthError(error.message));
+    } catch (e) {
+      return screenNewPassword(readableAuthError(e.message));
+    }
+    RECOVERING = false;
+    clearRecoveryFromUrl();
+    route();
+  };
+  document.getElementById('np_go').onclick = go;
+  document.getElementById('np_b').onkeydown = e => { if (e.key === 'Enter') go(); };
+}
+
+/* True from the moment a recovery link is recognised until the new password
+   is saved, so route() cannot open the bunk underneath the screen. */
+let RECOVERING = false;
+
+/* Supabase hands the recovery token back in the URL — in the hash on the
+   implicit flow, as ?code= on PKCE. Either way it has been consumed by the
+   time we look, and leaving it in the address bar invites it being pasted or
+   shared, so it is wiped once we have acted on it. */
+function looksLikeRecovery() {
+  const h = location.hash || '', q = location.search || '';
+  return /type=recovery/.test(h) || /type=recovery/.test(q);
+}
+function clearRecoveryFromUrl() {
+  try { history.replaceState(null, '', location.pathname); } catch {}
+}
+
 /* --------------------------------------------------- bunk disabled ------ */
 /* The administrator has switched this bunk off. Row-level security already
    hides every row, so without this the app would open onto blank tables and
@@ -222,7 +279,20 @@ async function route() {
   if (!DB.configured) return screenConfig('');
   let session = null;
   try { session = await DB.auth.session(); } catch {}
-  if (!session) return screenSignIn('');
+  /* A reset link in flight outranks everything: show the password screen even
+     though there is a valid session, because that session only exists to let
+     them set one. */
+  if (RECOVERING || (session && looksLikeRecovery())) {
+    RECOVERING = true;
+    return screenNewPassword('');
+  }
+  if (!session) {
+    if (looksLikeRecovery()) {
+      clearRecoveryFromUrl();
+      return screenSignIn('That reset link has expired or was already used. Ask for a new one.');
+    }
+    return screenSignIn('');
+  }
   DB.setSessionEmail(session.user.email || '');
   setSessionEmail(session.user.email || '');
 
@@ -244,6 +314,14 @@ async function route() {
   screenBunks('');
 }
 
+/* A reset link followed in a tab that already has the app open changes only
+   the hash, which the browser treats as a same-document navigation: nothing
+   reloads and route() never runs again. Without this the person clicks the
+   link, lands on their dashboard, and never gets to set a password. */
+window.addEventListener('hashchange', () => {
+  if (!RECOVERING && looksLikeRecovery()) { RECOVERING = true; screenNewPassword(''); }
+});
+
 window.addEventListener('bunksoft:signout', async () => {
   try { localStorage.removeItem('bunksoft.bunk'); } catch {}
   await DB.auth.signOut();
@@ -257,7 +335,10 @@ window.addEventListener('bunksoft:switchbunk', () => {
 /* ---------------------------------------------------------------- start -- */
 if (DB.configured) {
   DB.initClient(createClient);
-  DB.auth.onChange(s => { if (!s) route(); });
+  DB.auth.onChange((s, event) => {
+    if (event === 'PASSWORD_RECOVERY') { RECOVERING = true; return screenNewPassword(''); }
+    if (!s && !RECOVERING) route();
+  });
 }
 route();
 

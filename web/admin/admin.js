@@ -362,15 +362,13 @@ function formNewBusiness() {
              autocapitalize="none" spellcheck="false"></label>
     <label class="f"><span>Phone <i class="sub">(optional)</i></span><input type="text" id="nb_phone" placeholder="98765 43210"></label>
   </div>
-  <div class="fr" style="margin-top:12px">
+  <div class="pwrow">
     <label class="f"><span>Password to hand over</span>
-      <input type="text" id="nb_pass" value="${esc(suggestPassword())}" spellcheck="false">
-      <span class="sub">At least 10 characters, with letters and digits. They can change it after signing in.</span></label>
-    <div class="row">
-      <button class="btn ghost sm" data-act="regen">New password</button>
-      <button class="btn" data-act="createbusiness">Create the business</button>
-    </div>
+      <input type="text" id="nb_pass" value="${esc(suggestPassword())}" spellcheck="false"></label>
+    <button class="btn ghost" data-act="regen">New password</button>
+    <button class="btn" data-act="createbusiness">Create the business</button>
   </div>
+  <p class="pwhint">At least 10 characters, with letters and digits. They can change it after signing in.</p>
   <div id="nb_out" style="margin-top:14px"></div>`;
 }
 
@@ -473,8 +471,8 @@ function vAccounts() {
           <option value="manager">Manager</option>
           <option value="owner">Owner</option>
         </select></label>
-        <div class="row">
-          <button class="btn ghost sm" data-act="regen2">New password</button>
+        <div class="row" style="align-items:flex-end">
+          <button class="btn ghost" data-act="regen2">New password</button>
           <button class="btn" data-act="createlogin">Create the login</button>
         </div>
       </div>
@@ -657,10 +655,10 @@ function modalAddStaff(bunkId) {
       <option value="manager">Manager — also edits rates and setup</option>
       <option value="owner">Owner — full control of this bunk</option>
     </select></label>
-    <label class="f"><span>Password to hand over</span>
-      <input type="text" id="as_pass" spellcheck="false" value="${esc(suggestPassword())}"></label>
-    <div class="row">
-      <button class="btn ghost sm" data-act="regen3">New password</button>
+    <div class="pwrow">
+      <label class="f"><span>Password to hand over</span>
+        <input type="text" id="as_pass" spellcheck="false" value="${esc(suggestPassword())}"></label>
+      <button class="btn ghost" data-act="regen3">New password</button>
       <button class="btn" data-act="dostaff" data-bunk="${esc(bunkId)}">Create the login</button>
     </div>
     <div id="as_out"></div>`);
@@ -670,10 +668,10 @@ function modalResetPw(userId, email) {
   modal('Reset password', `
     <p class="authsub">A new password for <b>${esc(email)}</b>. The old one stops working at once,
       and any device already signed in stays signed in until its session expires.</p>
-    <label class="f"><span>New password</span>
-      <input type="text" id="rp_pass" spellcheck="false" value="${esc(suggestPassword())}"></label>
-    <div class="row">
-      <button class="btn ghost sm" data-act="regen4">Another</button>
+    <div class="pwrow">
+      <label class="f"><span>New password</span>
+        <input type="text" id="rp_pass" spellcheck="false" value="${esc(suggestPassword())}"></label>
+      <button class="btn ghost" data-act="regen4">Another</button>
       <button class="btn" data-act="doreset" data-id="${esc(userId)}" data-email="${esc(email)}">Set it</button>
     </div>
     <div id="rp_out"></div>`);

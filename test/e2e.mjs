@@ -133,9 +133,12 @@ const bal = await p.evaluate(()=>window.BunkSoft.S.customers[0].balance);
 ok('outstanding rose to '+bal, bal > 5000);
 await p.click('[data-tab="credit"]'); await p.waitForTimeout(400);
 await p.click('[data-act="pay"]'); await p.waitForTimeout(300);
-await p.fill('#pm_amt','10000'); await p.click('[data-act="savepay"]'); await p.waitForTimeout(900);
+await p.fill('#pm_amt','10000'); await p.click('[data-act="savepay"]'); await p.waitForTimeout(1200);
 const bal2 = await p.evaluate(()=>window.BunkSoft.S.customers[0].balance);
 ok('payment reduced it to '+bal2, Math.abs(bal2-(bal-10000))<0.01);
+/* Recording a payment now hands over a receipt; close it before carrying on. */
+ok('a receipt was issued for it', /Payment receipt/i.test(await p.textContent('#layer')));
+await p.keyboard.press('Escape'); await p.waitForTimeout(400);
 
 console.log('5. Expenses and cash book');
 await p.click('[data-tab="expense"]'); await p.waitForTimeout(400);
