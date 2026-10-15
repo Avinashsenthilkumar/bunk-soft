@@ -54,6 +54,11 @@ const card = (title, sub, body, foot) => `
   </div>`;
 
 const err = m => `<div class="autherr">${esc(m)}</div>`;
+const good = m => `<div class="authok">${esc(m)}</div>`;
+/* A screen is told what KIND of message it is carrying, not just the words.
+   Everything on these screens was red before, so "a reset link is on its way"
+   looked like the reset had failed. */
+const note = m => (m && m.ok) ? good(m.text) : (m ? err(m.text || m) : '');
 
 /* Supabase's messages are written for developers. Say what an operator
    standing at the forecourt can act on instead. */
@@ -94,14 +99,15 @@ function screenConfig(message) {
 /* -------------------------------------------------------------- sign in -- */
 function screenSignIn(message) {
   show(card('Sign in', 'Welcome back.',
-    `${message ? err(message) : ''}
+    `${note(message)}
      <label class="f"><span>Email</span><input type="email" id="au_email" autocomplete="username"
        inputmode="email" autocapitalize="none" spellcheck="false"></label>
      <label class="f"><span>Password</span><input type="password" id="au_pass"
        autocomplete="current-password"></label>
      <button class="btn wide" id="au_go">Sign in</button>
      <button class="linkbtn" id="au_forgot">Forgot password?</button>`,
-    `Need an account, or a password reset? Contact ${esc(SUPPORT.contact)}.`));
+    /* A password reset no longer needs anybody. Only a new account does. */
+    `Need an account? Contact ${esc(SUPPORT.contact)}.`));
 
   const go = async () => {
     const email = document.getElementById('au_email').value;
@@ -122,11 +128,17 @@ function screenSignIn(message) {
   document.getElementById('au_pass').onkeydown = e => { if (e.key === 'Enter') go(); };
 
   document.getElementById('au_forgot').onclick = async () => {
-    const email = document.getElementById('au_email').value;
+    const btn = document.getElementById('au_forgot');
+    const email = document.getElementById('au_email').value.trim();
     if (!email) return screenSignIn('Enter your email first, then press Forgot password.');
+    btn.disabled = true; btn.textContent = 'Sending…';
     try { await DB.auth.reset(email); } catch {}
-    /* Never reveal whether an account exists for that address. */
-    screenSignIn('If that email has an account, a reset link is on its way. If nothing arrives, ask your administrator to set a new password for you.');
+    /* Never reveal whether an account exists for that address — the reply is
+       the same either way. It is good news, so it is not shown in red. */
+    screenSignIn({ ok: true, text: 'Check your email. If ' + email + ' has an account, a reset link is on its way. Look in spam too — the link lasts one hour.' });
+    /* Put the address back so nobody has to type it twice. */
+    const again = document.getElementById('au_email');
+    if (again) again.value = email;
   };
 }
 

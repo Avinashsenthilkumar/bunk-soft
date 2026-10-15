@@ -607,3 +607,24 @@ changed CSS and router and are unchanged: 19 / 19 / 73 / 42 / 17.
 
 Version 1.4.1. Service-worker cache bumped to `bunksoft-v8` so returning
 phones pick up the new stylesheet. Web files only; no database change.
+
+### 37. "A reset link is on its way" was printed in alarm red
+
+The sign-in screen had one message box and it was red, because until now every
+message it carried was a correction. The reset confirmation went into the same
+box, so a successful reset request looked like a failure and the operator
+stopped there instead of going to look in their inbox.
+
+A second box in green now carries good news; corrections stay red. The
+confirmation also names the address the link went to, mentions the spam
+folder, says the link lasts an hour, and keeps the address in the field so
+nobody types it twice.
+
+The footer still read "Need an account, or a password reset? Contact your
+BunkSoft administrator" — advice the screen had just made unnecessary, and the
+line sitting directly under the confirmation was what the operator read. It
+now reads "Need an account? Contact your BunkSoft administrator."
+
+Ten new checks in `npm run test:domain` (**86** now).
+
+Version 1.4.2, service-worker cache `bunksoft-v9`.
