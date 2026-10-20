@@ -40,6 +40,20 @@ function toast(msg){
   /* An error deserves longer on screen than a confirmation. */
   setTimeout(()=>t.remove(),String(msg).length>70?6000:2800);
 }
+/* Refuse a value AND point at the field that carries it. A toast on its own
+   leaves the operator hunting for which box was wrong, and on a form the width
+   of the Decantation row that is a real pause. Returns false so a caller can
+   `return bad(...)`. */
+function bad(sel,msg){
+  toast(msg);
+  const el=typeof sel==='string'?$(sel):sel;
+  if(el){
+    el.classList.add('inval');
+    el.addEventListener('input',()=>el.classList.remove('inval'),{once:true});
+    try{el.focus({preventScroll:false});}catch{el.focus();}
+  }
+  return false;
+}
 
 /* ============================ state ============================ */
 const S={
@@ -467,6 +481,7 @@ function render(){
   view.innerHTML=migrationBanner()+storageBanner()+fn();
   if(S.modal)$('#layer').innerHTML=S.modal(); else $('#layer').innerHTML='';
   wireLive();
+  fitChartLabels();
   /* phone: the nav is a horizontal strip — keep the active section in view */
   if(window.innerWidth<=900) $('#tabs .nv[aria-current="true"]')?.scrollIntoView({block:'nearest',inline:'center'});
 }
@@ -673,19 +688,32 @@ function chartDonut(items,unit){
     <div class="dlegend">${items.map(it=>`<div class="dlrow"><i class="dot" style="background:${it.color}"></i>
       <span>${esc(it.label)}</span><i>${Math.round(it.value/total*100)}%</i><b>${nf(it.value,0)}${unit==='L'?' L':''}</b></div>`).join('')}</div>`;
 }
+/* A tank holds nothing less than nothing. A negative book figure is arithmetic,
+   not fuel: it means the meters have recorded more litres out than the book
+   ever had in, and showing "−5,056 L" states a quantity that cannot exist.
+   The figure shown is floored at zero and the shortfall is named underneath as
+   what it actually is — a measurement to settle with a dip. */
+const stockOf=t=>Math.max(0,num(t.stock));
+const oversoldBy=t=>Math.max(0,-num(t.stock));
 function tankCard(t){
-  const p=prod(t.product), pct=Math.max(0,Math.min(100,(num(t.stock)/Math.max(1,num(t.capacity)))*100));
-  const low=num(t.stock)<=num(t.min);
+  const p=prod(t.product), have=stockOf(t), over=oversoldBy(t);
+  const pct=Math.max(0,Math.min(100,(have/Math.max(1,num(t.capacity)))*100));
+  const empty=have<=0;
+  const low=!empty&&have<=num(t.min);
   const sold=soldToday(S.date,t.id), rec=recvToday(S.date,t.id);
-  const avg=avgDaily(t.id); const dos=avg>0?(num(t.stock)/avg):null;
+  const avg=avgDaily(t.id); const dos=avg>0?(have/avg):null;
   return `<div class="tank">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
       <span class="chip"><i class="dot" style="background:${pcol(t.product)}"></i>${esc(t.name)} · ${esc(p.short)}</span>
-      ${low?'<span class="pill no">low</span>':(dos!==null&&dos<2?'<span class="pill wr">'+dos.toFixed(1)+'d</span>':'')}
+      ${empty?'<span class="pill no">empty</span>'
+        :low?'<span class="pill no">low</span>'
+        :(dos!==null&&dos<2?'<span class="pill wr">'+dos.toFixed(1)+'d</span>':'')}
     </div>
     <div class="gauge"><div class="gfill" style="width:${pct}%;background:${pcol(t.product)}"></div>
       <div class="gmark" style="left:${Math.min(100,(num(t.min)/Math.max(1,num(t.capacity)))*100)}%" title="Reorder level"></div></div>
-    <div class="kv"><span>Book stock</span><span>${nf(t.stock,0)} L <span style="color:var(--ink-3)">/ ${nf(t.capacity,0)}</span></span></div>
+    <div class="kv"><span>Book stock</span><span>${nf(have,0)} L <span style="color:var(--ink-3)">/ ${nf(t.capacity,0)}</span></span></div>
+    ${over?`<div class="tankwarn">Meters have recorded ${nf(over,0)} L more than this tank held. Record a dip to
+      set the true figure, or a decantation if a delivery was missed.</div>`:''}
     <div class="kv"><span>Received today</span><span>${rec?'+'+nf(rec,0)+' L':'—'}</span></div>
     <div class="kv"><span>Sold today</span><span>${sold?'−'+nf(sold,2)+' L':'—'}</span></div>
     <div class="kv"><span>Cover at 7-day avg</span><span>${dos===null?'—':dos.toFixed(1)+' days'}</span></div>
@@ -715,7 +743,7 @@ function chartStacked(days){
   const x=i=>PL+iw*((i+0.5)/days.length), y=v=>PT+ih-(v/top)*ih;
   let ticks=''; for(let v=0;v<=top+1e-6;v+=step){const yy=y(v);
     ticks+=`<line x1="${PL}" x2="${W-PR}" y1="${yy}" y2="${yy}" stroke="var(--line)" stroke-width="1"/>
-      <text x="${PL-8}" y="${yy+3.5}" text-anchor="end" style="fill:var(--ink-3);font-family:var(--fm);font-size:10px">${S.chartMode==='value'?compact(v):nf(v,0)}</text>`;}
+      <text x="${PL-8}" y="${yy+3.5}" text-anchor="end" style="fill:var(--ink-3);font-family:var(--fm);font-size:var(--lbl,8px)">${S.chartMode==='value'?compact(v):nf(v,0)}</text>`;}
   let bars='';
   days.forEach((d,i)=>{
     const vs=val(d); let acc=0;
@@ -728,7 +756,7 @@ function chartStacked(days){
     });
     bars+=`<rect class="hit" x="${x(i)-iw/days.length/2}" y="${PT}" width="${iw/days.length}" height="${ih}" fill="transparent" data-i="${i}"></rect>`;
     if(days.length<=16||i%2===0)
-      bars+=`<text x="${x(i)}" y="${H-10}" text-anchor="middle" style="fill:var(--ink-3);font-family:var(--fm);font-size:10px">${dshort(d.date)}</text>`;
+      bars+=`<text x="${x(i)}" y="${H-10}" text-anchor="middle" style="fill:var(--ink-3);font-family:var(--fm);font-size:var(--lbl,8px)">${dshort(d.date)}</text>`;
   });
   const data=days.map(d=>({date:d.date,vals:val(d)}));
   window.__chart={data,prods:prods.map(p=>p.short),mode:S.chartMode};
@@ -737,6 +765,29 @@ function chartStacked(days){
   </svg></div>
   <div class="legend">${prods.map(p=>`<span class="chip"><i class="dot" style="background:${pcol(p.id)}"></i>${esc(p.short)}</span>`).join('')}</div>`;
 }
+/* The chart is drawn in its own coordinate system and then stretched to fill
+   the panel, so a label written as 10px came out at 19 on a wide screen —
+   which is why the dates and the rupee scale looked oversized. The size is
+   given in chart units, so it must be divided by however much the chart was
+   stretched for the text to land at the size asked for on the glass.
+   LABEL_PX is that size, in real screen pixels. */
+const LABEL_PX=8;
+function fitChartLabels(){
+  const svg=$('#trend'); if(!svg)return;
+  const box=svg.viewBox&&svg.viewBox.baseVal;
+  const drawn=svg.getBoundingClientRect().width;
+  if(!box||!box.width||!drawn)return;
+  const scale=drawn/box.width;
+  svg.style.setProperty('--lbl',(LABEL_PX/scale).toFixed(2)+'px');
+}
+/* Stretching changes with the window, so the size is worked out again when it
+   does. Nothing is re-rendered — only the one custom property moves. */
+let fitPending=0;
+window.addEventListener('resize',()=>{
+  clearTimeout(fitPending);
+  fitPending=setTimeout(fitChartLabels,120);
+});
+
 function niceStep(max){const raw=max/4,mag=Math.pow(10,Math.floor(Math.log10(raw)||0)),n=raw/mag;return (n<=1?1:n<=2?2:n<=5?5:10)*mag;}
 function compact(v){return v>=1e7?'₹'+(v/1e7).toFixed(1)+'cr':v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1000?'₹'+Math.round(v/1000)+'k':'₹'+Math.round(v);}
 
@@ -758,6 +809,12 @@ function vShift(){
       </div>
 
       <div class="sectitle">Nozzle meter readings</div>
+      ${(()=>{const dry=S.date===today()?emptyTanksInUse():[];
+        return dry.length?`<div class="banner bad" id="dryWarn">
+          <b>${dry.map(t=>esc(t.name)).join(', ')} ${dry.length>1?'are':'is'} empty.</b>
+          Readings on ${dry.length>1?'their':'its'} nozzles cannot be saved until a decantation is recorded —
+          or a dip, if the book figure is the thing that is wrong.
+        </div>`:'';})()}
       <div class="tw"><table id="nozTable">
         <thead><tr><th>Nozzle</th><th>Product</th><th class="r">Opening</th><th class="r">Closing</th><th class="r">Test (L)</th><th class="r">Rollover (L)</th><th class="r">Sold (L)</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead>
         <tbody>${t.lines.map(l=>`<tr data-noz="${esc(l.noz.id)}">
@@ -849,8 +906,8 @@ function vStock(){
       <div class="pb">
         <div class="fr">
           <label class="f"><span>Tank</span><select id="rc_tank">${S.tanks.map(t=>`<option value="${esc(t.id)}">${esc(t.name)} · ${esc(prod(t.product).short)}</option>`).join('')}</select></label>
-          <label class="f"><span>Quantity (L)</span><input type="number" step="1" id="rc_qty" placeholder="e.g. 12000"></label>
-          <label class="f"><span>Rate ₹/L</span><input type="number" step="0.01" id="rc_rate" placeholder="invoice rate"></label>
+          <label class="f"><span>Quantity (L) <b class="req" title="Required">*</b></span><input type="number" step="1" min="1" id="rc_qty" required placeholder="e.g. 12000"></label>
+          <label class="f"><span>Rate ₹/L <b class="req" title="Required">*</b></span><input type="number" step="0.01" min="0.01" id="rc_rate" required placeholder="invoice rate"></label>
           <label class="f"><span>Invoice no.</span><input type="text" id="rc_inv" placeholder="IOC/…"></label>
           <label class="f"><span>Tanker no.</span><input type="text" id="rc_truck" placeholder="TN 45 K …"></label>
           <button class="btn" data-act="addreceipt">Add receipt</button>
@@ -873,7 +930,7 @@ function vStock(){
       <div class="pb">
         <div class="fr">
           <label class="f"><span>Tank</span><select id="dp_tank">${S.tanks.map(t=>`<option value="${esc(t.id)}">${esc(t.name)} · ${esc(prod(t.product).short)}</option>`).join('')}</select></label>
-          <label class="f"><span>Dip stock (L)</span><input type="number" step="1" id="dp_qty" placeholder="from dip chart"></label>
+          <label class="f"><span>Dip stock (L) <b class="req" title="Required">*</b></span><input type="number" step="1" min="0" id="dp_qty" required placeholder="from dip chart"></label>
           <button class="btn" data-act="adddip">Record dip</button>
         </div>
         <div class="setupnote">Recording a dip sets book stock to the measured quantity and logs the difference as gain or loss.
@@ -1565,6 +1622,33 @@ function readMeterRows(){
    back 100,000,000 litres. Taken from the width of the opening reading. */
 const wrapSpan=open=>Math.pow(10,Math.max(4,String(Math.floor(Math.abs(open))).length));
 
+/* Litres cannot come out of a tank that is empty. Letting the reading through
+   drives the book figure further below nothing and books a margin on fuel that
+   was never bought — and the forecourt finds out weeks later, in the P&L.
+   Book stock is one live figure rather than one per day, so this can only
+   speak for today; a shift being entered for a past date is judged by its
+   readings alone, as before. */
+function emptyTanksInUse(){
+  const used={};
+  activeNozzles().forEach(n=>{ if(n.tank)used[n.tank]=1; });
+  /* Named in the order the tanks are listed everywhere else, not in whatever
+     order the nozzles happen to come back in. */
+  return S.tanks.filter(t=>used[t.id]&&stockOf(t)<=0);
+}
+function checkTanks(rows){
+  if(S.date!==today())return null;
+  for(const r of rows){
+    if(!r.noz)continue;
+    const moved=Math.max(0,r.close+r.roll-r.open-r.test);
+    if(moved<=0)continue;
+    const t=tank(r.noz.tank);
+    if(t&&stockOf(t)<=0)
+      return t.name+' is empty, so '+r.noz.name+' cannot have sold '+nf(moved,2)+' L. '+
+        'Record the decantation that filled it, or a dip if the book figure is wrong.';
+  }
+  return null;
+}
+
 function checkMeters(rows){
   for(const r of rows){
     const name=r.noz?r.noz.name:'This nozzle';
@@ -1595,8 +1679,20 @@ function saveShift(close){
   const sh=day.shifts[nm]||blankShift();
   const wasClosed=!!sh.closed;
   const rows=readMeterRows();
-  const bad=checkMeters(rows);
-  if(bad){ toast(bad); return; }
+  const badRead=checkMeters(rows);
+  if(badRead){ toast(badRead); return; }
+  /* An empty tank stops the operator outright. An owner or manager can still
+     put the reading through — a bunk that started using BunkSoft mid-month has
+     fuel in the ground that the book has never been told about, and refusing
+     every shift until someone works out the opening figure would shut the
+     forecourt. They are told exactly what it costs before they agree. */
+  const dry=checkTanks(rows);
+  if(dry){
+    if(!repo.canConfigure()){ toast(dry); return; }
+    if(!confirm(dry+'\n\nSaving anyway will take the book stock further below zero '+
+      'and value these litres against fuel that was never recorded as bought.\n\n'+
+      'Save it anyway?')) return;
+  }
 
   const closing=close?true:$('#f_closed').value==='1';
   /* A shift cannot be closed against a rate card that is not set: the sale
@@ -1677,8 +1773,12 @@ function addCredit(){
 
 function addReceipt(){
   const tid=$('#rc_tank').value, qty=num($('#rc_qty').value), rate=num($('#rc_rate').value);
-  if(qty<=0)return toast('Enter the quantity decanted.');
-  if(rate<0)return toast('The purchase rate cannot be negative.');
+  /* Both figures are required. The rate used to be optional and defaulted to
+     nothing, which quietly valued the delivery at zero and made every margin
+     after it wrong — easier to let through than to find afterwards. */
+  if($('#rc_qty').value.trim()===''||qty<=0)return bad('#rc_qty','Enter the quantity decanted.');
+  if($('#rc_rate').value.trim()==='')return bad('#rc_rate','Enter the invoice rate — it sets the purchase cost for margin.');
+  if(rate<=0)return bad('#rc_rate','The purchase rate must be more than zero.');
   const t=tank(tid); if(!t)return toast('Pick a tank.');
   /* A decantation larger than the tank can hold is not a judgement call — the
      fuel physically will not go in. It used to be a confirmation, which meant
@@ -1700,9 +1800,9 @@ function addReceipt(){
    repository asks the server to read it inside the same statement. */
 function addDip(){
   const tid=$('#dp_tank').value;
-  if($('#dp_qty').value==='')return toast('Enter the dip quantity.');
+  if($('#dp_qty').value.trim()==='')return bad('#dp_qty','Enter the dip quantity.');
   const dip=num($('#dp_qty').value), t=tank(tid); if(!t)return toast('Pick a tank.');
-  if(dip<0)return toast('A dip cannot be negative.');
+  if(dip<0)return bad('#dp_qty','A dip cannot be negative.');
   /* A tank cannot measure more than it holds. */
   if(num(t.capacity)&&dip>num(t.capacity)){
     return toast(t.name+' holds '+nf(t.capacity,0)+' L, so it cannot dip at '+nf(dip,0)+' L. '+

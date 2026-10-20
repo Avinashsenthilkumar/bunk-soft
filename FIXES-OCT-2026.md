@@ -607,3 +607,90 @@ changed CSS and router and are unchanged: 19 / 19 / 73 / 42 / 17.
 
 Version 1.4.1. Service-worker cache bumped to `bunksoft-v8` so returning
 phones pick up the new stylesheet. Web files only; no database change.
+
+### 37. "A reset link is on its way" was printed in alarm red
+
+The sign-in screen had one message box and it was red, because until now every
+message it carried was a correction. The reset confirmation went into the same
+box, so a successful reset request looked like a failure and the operator
+stopped there instead of going to look in their inbox.
+
+A second box in green now carries good news; corrections stay red. The
+confirmation also names the address the link went to, mentions the spam
+folder, says the link lasts an hour, and keeps the address in the field so
+nobody types it twice.
+
+The footer still read "Need an account, or a password reset? Contact your
+BunkSoft administrator" — advice the screen had just made unnecessary, and the
+line sitting directly under the confirmation was what the operator read. It
+now reads "Need an account? Contact your BunkSoft administrator."
+
+Ten new checks in `npm run test:domain` (**86** now).
+
+Version 1.4.2, service-worker cache `bunksoft-v9`.
+
+---
+
+## Round 8 — 16 October 2026
+
+### 38. Decantation went in with half the figures missing
+
+Quantity and rate were both optional. A rate left blank was taken as nothing,
+which valued the whole delivery at zero and quietly made every margin after it
+wrong — easy to let through, hard to find weeks later in the P&L.
+
+Both are now marked with a red asterisk and refused if empty, and a rate of
+zero is refused too. A refusal names the box it is about and outlines it in
+red, instead of a toast that leaves the operator hunting across the row; the
+mark clears on the next keystroke. The dip quantity is marked the same way.
+
+### 39. A tank showed −5,056 L, and still took sales
+
+A book figure below zero is arithmetic, not fuel. It means the meters have
+recorded more litres out than the book ever had in, and printing "−5,056 L"
+states a quantity that cannot exist.
+
+Three changes:
+
+- **The card never reads below empty.** The figure is floored at zero and the
+  tank is flagged `empty`. The shortfall is named underneath for what it
+  actually is — "Meters have recorded 5,056 L more than this tank held" — with
+  the two ways to settle it: a dip if the book is wrong, a decantation if a
+  delivery was missed. The stored figure is untouched; only the display is
+  floored, so nothing is quietly rewritten.
+- **Sales Entry says so before anything is typed.** A red bar above the meter
+  table names the empty tanks and says readings on their nozzles cannot be
+  saved yet.
+- **Saving is refused.** A reading that moves litres on a nozzle fed by an
+  empty tank is stopped, naming the tank and the nozzle. An owner or manager
+  can still override, because a bunk that began using BunkSoft mid-month has
+  fuel in the ground the book has never been told about and refusing every
+  shift would shut the forecourt — but the dialog says plainly what the
+  override costs. An operator cannot override.
+
+Only today's entry is checked. Book stock is one live figure rather than one
+per day, so a shift being entered for a past date is still judged by its
+readings alone.
+
+### 40. Chart labels were nearly twice the size they were written at
+
+The chart is drawn in its own coordinate system and then stretched to fill the
+panel, so a label written as 10px came out at 19 on a wide screen. The size is
+now worked out from how far the chart was stretched, so the dates and the
+rupee scale land at exactly 8px on the glass whatever the window width — and
+again when it changes. `LABEL_PX` in `app.js` is the one number to move if 8
+turns out too small.
+
+### Proving it
+
+Twenty-eight new checks across `npm run test:domain` (**111** now), covering
+every refusal above, the floored card, the warning bar, both sides of the
+override, and the measured on-screen label size.
+
+`test/e2e.mjs` and `test/nomigration-e2e.mjs` now decant into the tanks before
+entering a shift. A new bunk's tanks start empty in the book, so selling out
+of them was never a real sequence — the new rule simply made the fixtures say
+so out loud.
+
+Version 1.4.3, service-worker cache `bunksoft-v10`. Web files only; no
+database change.

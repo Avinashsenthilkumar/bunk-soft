@@ -613,6 +613,155 @@ await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','BunkSoft2
 await p.click('#au_go'); await p.waitForTimeout(1600);
 ok('the new password signs in', await shown('[data-tab="dash"]'));
 
+/* ====================================================================== 27 */
+console.log('\n27. Asking for the reset reads as good news, not a failure');
+/* The whole sign-in screen used one red box, so "a reset link is on its way"
+   looked like the reset had failed and the operator stopped there. */
+await p.evaluate(()=>window.dispatchEvent(new CustomEvent('bunksoft:signout')));
+await p.waitForTimeout(1200);
+
+await p.click('#au_forgot'); await p.waitForTimeout(500);
+ok('pressing it with no email asks for one',
+   /Enter your email first/i.test(await p.textContent('body')));
+ok('and that one IS red, because it is a correction',
+   await shown('.autherr') && !(await shown('.authok')));
+
+await p.fill('#au_email','owner@subsel.com');
+await p.click('#au_forgot'); await p.waitForTimeout(900);
+const fp = await p.textContent('body');
+ok('a sent link is confirmed in green, not red', await shown('.authok'));
+ok('no red box is left on the screen', !(await shown('.autherr')));
+ok('it says to check email', /Check your email/i.test(fp));
+ok('it names the address it went to', /owner@subsel\.com/.test(fp));
+ok('it mentions spam, where these usually land', /spam/i.test(fp));
+ok('it does not send the operator to the administrator',
+   !/ask your administrator to set a new password/i.test(fp));
+ok('the address is kept so nobody types it twice',
+   (await p.inputValue('#au_email')) === 'owner@subsel.com');
+ok('the footer no longer offers a reset the screen now does itself',
+   !/Need an account, or a password reset/i.test(fp) && /Need an account\?/i.test(fp));
+
+/* ====================================================================== 28 */
+console.log('\n28. Decantation refuses to go in half-filled');
+await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','BunkSoft2027x');
+await p.click('#au_go'); await p.waitForTimeout(1800);
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(700);
+
+ok('the quantity is marked as required', await shown('label:has(#rc_qty) .req'));
+ok('the rate is marked as required', await shown('label:has(#rc_rate) .req'));
+ok('and the dip quantity is too', await shown('label:has(#dp_qty) .req'));
+
+const receipts = () => p.evaluate(()=>
+  (window.BunkSoft.S.days[window.BunkSoft.S.date].receipts||[]).length);
+const before28 = await receipts();
+
+await p.fill('#rc_qty',''); await p.fill('#rc_rate','99');
+await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(500);
+ok('no quantity is refused', /Enter the quantity decanted/i.test(await toastText()));
+ok('and the quantity box is the one marked wrong',
+   await p.evaluate(()=>document.querySelector('#rc_qty').classList.contains('inval')));
+
+await p.fill('#rc_qty','3000'); await p.fill('#rc_rate','');
+await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(500);
+ok('no rate is refused too', /Enter the invoice rate/i.test(await toastText()));
+ok('and the rate box is the one marked wrong',
+   await p.evaluate(()=>document.querySelector('#rc_rate').classList.contains('inval')));
+
+await p.fill('#rc_rate','0');
+await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(500);
+ok('a rate of zero is refused — it would value the delivery at nothing',
+   /must be more than zero/i.test(await toastText()));
+ok('nothing was written while it was being refused', (await receipts())===before28);
+
+ok('typing in the box clears the mark',
+   await p.evaluate(async ()=>{ const el=document.querySelector('#rc_rate');
+     el.value='95'; el.dispatchEvent(new Event('input',{bubbles:true}));
+     return !el.classList.contains('inval'); }));
+
+await p.fill('#rc_qty','3000'); await p.fill('#rc_rate','95');
+await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(1000);
+ok('with both filled in it goes through', (await receipts())===before28+1);
+
+/* ====================================================================== 29 */
+console.log('\n29. A tank never reads below empty, and cannot sell what it has not got');
+/* Drive one tank past zero the way a forecourt does: more litres through the
+   meters than the book ever held. */
+await p.evaluate(async () => {
+  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
+  const sb = createClient('https://demo.supabase.co','x'.repeat(60),{auth:{storageKey:'dry'}});
+  await sb.auth.signInWithPassword({email:'owner@subsel.com',password:'BunkSoft2027x'});
+  /* every tank dry, and the first one run well past dry */
+  for (const t of window.BunkSoft.S.tanks)
+    await sb.from('tanks').update({ current_stock: t===window.BunkSoft.S.tanks[0]?-4200:0 }).eq('id', t.id);
+});
+await p.goto(BASE); await p.waitForTimeout(1800);
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(700);
+
+const stockTxt = await p.textContent('#view');
+ok('the card does not print a negative quantity', !/−?-\s?4,?200/.test(stockTxt));
+ok('it reads as empty instead', /\bempty\b/i.test(stockTxt));
+ok('and says how far the meters ran past the book',
+   /4,200 L more than this tank held/i.test(stockTxt));
+ok('the underlying figure is still the true one, not quietly rewritten',
+   (await p.evaluate(()=>Number(window.BunkSoft.S.tanks[0].stock))) === -4200);
+
+await p.click('[data-tab="shift"]'); await p.waitForTimeout(800);
+ok('shift entry warns before a single reading is typed', await shown('#dryWarn'));
+ok('and names the tank', /Tank 1/i.test(await p.textContent('#dryWarn')));
+
+
+const openOf = await p.evaluate(()=>
+  Number(document.querySelector('#nozTable tbody tr[data-noz] input[data-fld="open"]').value)||0);
+await fillRow(0,'close',openOf+150);
+await p.waitForTimeout(300);
+
+/* The owner is asked rather than refused outright — a bunk that started using
+   BunkSoft mid-month has fuel the book has never been told about. Record what
+   the dialog said so the refusal can be read, not just counted. */
+const askAndSay = async yes => p.evaluate(v=>{
+  window.__lastAsk=''; window.confirm = m => { window.__lastAsk = String(m); return v; };
+}, yes);
+const nozId = await p.evaluate(()=>
+  document.querySelector('#nozTable tbody tr[data-noz]').dataset.noz);
+const closeSaved = () => p.evaluate(id=>{
+  const d=window.BunkSoft.S.days[window.BunkSoft.S.date];
+  const sh=Object.values(d.shifts).find(s=>s.readings&&s.readings[id]);
+  return sh?Number(sh.readings[id].close)||0:0;
+}, nozId);
+
+await askAndSay(false);                    /* the owner is asked, and says no */
+await p.click('[data-act="saveshift"]'); await p.waitForTimeout(1200);
+const asked = await p.evaluate(()=>window.__lastAsk||'');
+ok('the owner is stopped and the tank is named', /Tank 1 is empty/i.test(asked), 'asked: '+asked.slice(0,90));
+const dryNoz = await p.evaluate(id=>
+  (window.BunkSoft.S.config.nozzles.find(n=>n.id===id)||{}).name||'', nozId);
+ok('the nozzle that cannot have sold it is named too ('+dryNoz+')',
+   !!dryNoz && asked.includes(dryNoz));
+ok('and the cost of overriding is spelled out', /below zero/i.test(asked));
+ok('declining the override saves nothing', (await closeSaved())!==openOf+150);
+
+await askAndSay(true);              /* an owner who knows why, may still save */
+await p.click('[data-act="saveshift"]'); await p.waitForTimeout(1500);
+ok('an owner who accepts the consequence can still put it through',
+   (await closeSaved())===openOf+150);
+await answer(true);                              /* leave the stub as it was */
+
+/* ====================================================================== 30 */
+console.log('\n30. Chart labels come out the size they were asked for');
+await p.click('[data-tab="report"]'); await p.waitForTimeout(1200);
+const lbl = await p.evaluate(()=>{
+  const svg = document.querySelector('#trend'); if(!svg) return null;
+  const t = svg.querySelector('text'); if(!t) return null;
+  const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
+  return { scale, units: parseFloat(getComputedStyle(t).fontSize),
+           onGlass: parseFloat(getComputedStyle(t).fontSize) * scale };
+});
+ok('the chart is on the page', !!lbl);
+ok('the label size is set from how far the chart was stretched ('+
+   (lbl?lbl.scale.toFixed(2):'?')+'×)', !!lbl && lbl.scale > 0);
+ok('and lands at 8px on the glass, not 19 ('+(lbl?lbl.onGlass.toFixed(1):'?')+'px)',
+   !!lbl && Math.abs(lbl.onGlass - 8) < 0.6);
+
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();
 console.log('\n'+pass+' passed, '+fail+' failed');

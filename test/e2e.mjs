@@ -93,6 +93,20 @@ for (let i=0;i<ids.length;i++){
 await p.click('[data-act="saverates"]'); await p.waitForTimeout(700);
 ok('rate board updated', (await p.textContent('#rateBoard')).includes('102.63'));
 
+/* Fill the tanks before selling out of them. A new bunk's tanks start at zero
+   in the book, and since this round the app refuses a reading on a tank that
+   holds nothing — which is the right answer, and also means the fixture has to
+   do what a real forecourt does and decant first. */
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(500);
+for (let i=0;i<3;i++){
+  await p.selectOption('#rc_tank',{index:i});
+  await p.fill('#rc_qty','5000'); await p.fill('#rc_rate','99');
+  await p.fill('#rc_inv','IOC/OPEN'+i);
+  await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(800);
+}
+const seeded = await p.evaluate(()=>window.BunkSoft.S.tanks.map(t=>t.stock));
+ok('all three tanks filled before any sale '+JSON.stringify(seeded), seeded.every(s=>s>=5000));
+
 await p.click('[data-tab="shift"]'); await p.waitForTimeout(500);
 const rows = await p.$$('#nozTable tbody tr[data-noz]');
 for (let i=0;i<rows.length;i++){
@@ -110,13 +124,15 @@ await p.keyboard.press('Escape'); await p.waitForTimeout(400);
 
 console.log('3. Stock moved by the database');
 const stock = await p.evaluate(()=>window.BunkSoft.S.tanks.map(t=>t.stock));
-ok('tank stock went negative/changed from sales '+JSON.stringify(stock), stock.some(s=>s!==0));
+ok('sales took stock back out of the tanks '+JSON.stringify(stock), stock.every(s=>s<5000));
 await p.click('[data-tab="stock"]'); await p.waitForTimeout(400);
 await p.selectOption('#rc_tank', {index:0});
-await p.fill('#rc_qty','8000'); await p.fill('#rc_rate','99.35'); await p.fill('#rc_inv','IOC/9107');
+/* Tank 1 holds 12,000 and already has the opening 5,000 less the shift's
+   sales in it, so a second 8,000 would not fit — and the app says so. */
+await p.fill('#rc_qty','7000'); await p.fill('#rc_rate','99.35'); await p.fill('#rc_inv','IOC/9107');
 await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(900);
 const st2 = await p.evaluate(()=>window.BunkSoft.S.tanks[0].stock);
-ok('decantation raised tank 1 to '+st2, st2 > 7000);
+ok('decantation raised tank 1 to '+st2, st2 > 11000);
 
 console.log('4. Credit');
 await p.click('[data-tab="credit"]'); await p.waitForTimeout(400);

@@ -92,6 +92,15 @@ const ids = await p.evaluate(()=>window.BunkSoft.S.config.products.map(x=>x.id.r
 for (const id of ids){ await p.fill('#rt_s_'+id,'100'); await p.fill('#rt_b_'+id,'90'); }
 await p.click('[data-act="saverates"]'); await p.waitForTimeout(700);
 
+/* Put fuel in the tanks first — a reading on a tank the book shows as empty is
+   refused now, migration or no migration. */
+await p.click('[data-tab="stock"]'); await p.waitForTimeout(500);
+for (let i=0;i<3;i++){
+  await p.selectOption('#rc_tank',{index:i});
+  await p.fill('#rc_qty','4000'); await p.fill('#rc_rate','90');
+  await p.click('[data-act="addreceipt"]'); await p.waitForTimeout(800);
+}
+
 await p.click('[data-tab="shift"]'); await p.waitForTimeout(500);
 const rows = await p.$$('#nozTable tbody tr[data-noz]');
 for (let i=0;i<rows.length;i++){
