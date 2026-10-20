@@ -613,34 +613,6 @@ await p.fill('#au_email','owner@subsel.com'); await p.fill('#au_pass','BunkSoft2
 await p.click('#au_go'); await p.waitForTimeout(1600);
 ok('the new password signs in', await shown('[data-tab="dash"]'));
 
-/* ====================================================================== 27 */
-console.log('\n27. Asking for the reset reads as good news, not a failure');
-/* The whole sign-in screen used one red box, so "a reset link is on its way"
-   looked like the reset had failed and the operator stopped there. */
-await p.evaluate(()=>window.dispatchEvent(new CustomEvent('bunksoft:signout')));
-await p.waitForTimeout(1200);
-
-await p.click('#au_forgot'); await p.waitForTimeout(500);
-ok('pressing it with no email asks for one',
-   /Enter your email first/i.test(await p.textContent('body')));
-ok('and that one IS red, because it is a correction',
-   await shown('.autherr') && !(await shown('.authok')));
-
-await p.fill('#au_email','owner@subsel.com');
-await p.click('#au_forgot'); await p.waitForTimeout(900);
-const fp = await p.textContent('body');
-ok('a sent link is confirmed in green, not red', await shown('.authok'));
-ok('no red box is left on the screen', !(await shown('.autherr')));
-ok('it says to check email', /Check your email/i.test(fp));
-ok('it names the address it went to', /owner@subsel\.com/.test(fp));
-ok('it mentions spam, where these usually land', /spam/i.test(fp));
-ok('it does not send the operator to the administrator',
-   !/ask your administrator to set a new password/i.test(fp));
-ok('the address is kept so nobody types it twice',
-   (await p.inputValue('#au_email')) === 'owner@subsel.com');
-ok('the footer no longer offers a reset the screen now does itself',
-   !/Need an account, or a password reset/i.test(fp) && /Need an account\?/i.test(fp));
-
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();
 console.log('\n'+pass+' passed, '+fail+' failed');

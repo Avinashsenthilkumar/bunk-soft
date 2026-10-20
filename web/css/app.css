@@ -324,11 +324,6 @@ html,body{min-height:100%}
 .linkbtn:hover{text-decoration:underline}
 .autherr{background:var(--bad-soft);color:var(--bad);border-radius:var(--r-sm);
   padding:10px 12px;font-size:13px;font-weight:600;margin-bottom:15px;line-height:1.45}
-/* The same box, for a message that is good news. "A reset link is on its way"
-   in alarm red reads as a failure, and the operator stops rather than going to
-   look in their inbox. */
-.authok{background:var(--good-soft);color:var(--good);border-radius:var(--r-sm);
-  padding:10px 12px;font-size:13px;font-weight:600;margin-bottom:15px;line-height:1.45}
 .authnote{margin:15px 0 0;font-size:12px;color:var(--ink-3);line-height:1.55}
 .authnote code{font-family:var(--fm);font-size:11.5px;background:var(--sunk);padding:1px 5px;border-radius:4px}
 .authfoot{text-align:center;margin-top:18px;color:#B9D4F1;font-size:13px}
