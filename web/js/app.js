@@ -771,7 +771,7 @@ function chartStacked(days){
    given in chart units, so it must be divided by however much the chart was
    stretched for the text to land at the size asked for on the glass.
    LABEL_PX is that size, in real screen pixels. */
-const LABEL_PX=8;
+const LABEL_PX=11;
 function fitChartLabels(){
   const svg=$('#trend'); if(!svg)return;
   const box=svg.viewBox&&svg.viewBox.baseVal;
@@ -2482,7 +2482,7 @@ function exportCredit(){
 /* Handles for the test harness and for support sessions. */
 /* A small surface for the test suites and for support work in the console.
    Nothing in the app reads from here. */
-window.BunkSoft={ get S(){return S;}, repo, get repoRole(){return repo.role;},
+window.BunkSoft={ get S(){return S;}, repo, get repoRole(){return repo.role;}, LABEL_PX,
   cashBook, dayTotals, shiftTotals, shiftLines, lastClose, strayCredit,
   activeNozzles, activeProducts, nozzlesFor, ratesOf, missingDays,
   render, getDay };

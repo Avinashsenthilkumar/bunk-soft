@@ -759,8 +759,13 @@ const lbl = await p.evaluate(()=>{
 ok('the chart is on the page', !!lbl);
 ok('the label size is set from how far the chart was stretched ('+
    (lbl?lbl.scale.toFixed(2):'?')+'×)', !!lbl && lbl.scale > 0);
-ok('and lands at 8px on the glass, not 19 ('+(lbl?lbl.onGlass.toFixed(1):'?')+'px)',
-   !!lbl && Math.abs(lbl.onGlass - 8) < 0.6);
+/* Read the target off the app rather than restating it here, so moving
+   LABEL_PX cannot leave this check quietly measuring the old number. */
+const want = await p.evaluate(()=>window.BunkSoft.LABEL_PX);
+ok('the size it aims for is the one the app declares ('+want+'px)', want > 0);
+ok('and that is what lands on the glass, whatever the stretch ('+
+   (lbl?lbl.onGlass.toFixed(1):'?')+'px)',
+   !!lbl && Math.abs(lbl.onGlass - want) < 0.6);
 
 /* ------------------------------------------------------------------------- */
 await b.close(); server.close();

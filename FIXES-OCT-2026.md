@@ -694,3 +694,20 @@ so out loud.
 
 Version 1.4.3, service-worker cache `bunksoft-v10`. Web files only; no
 database change.
+
+---
+
+## Round 9 — 20 October 2026
+
+### 41. 8px was too small to read
+
+Round 8 took the chart labels from an accidental 19px down to the 8 that was
+asked for, and on the real fifteen-day chart that turned out to be too small
+to read across the room. `LABEL_PX` is now **11** — the ordinary size for an
+axis label, and the thing both earlier numbers were overshooting.
+
+The check in the domain suite now reads the target off the app instead of
+restating it, so moving this number again cannot leave the test quietly
+measuring the old one.
+
+Version 1.4.4, service-worker cache `bunksoft-v11`.

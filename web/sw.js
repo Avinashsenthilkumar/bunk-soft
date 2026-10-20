@@ -13,7 +13,7 @@
    app blank even after the real file was deployed. v8 carries the panel and
    stat alignment in app.css and the password-reset landing in main.js; without
    the bump a returning phone keeps the old stylesheet and the old router. */
-const CACHE = 'bunksoft-v10';
+const CACHE = 'bunksoft-v11';
 const SHELL = ['./index.html', './css/app.css', './js/config.js', './js/main.js',
                './js/app.js', './js/db.js', './manifest.webmanifest', './icons/icon.svg'];
 
